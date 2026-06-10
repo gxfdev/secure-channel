@@ -4,591 +4,474 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网络安全传输演示系统</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; }
-        .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 16px; min-height: 100vh; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
         .card-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
         .step-card { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
-        .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #3b82f6; color: white; font-size: 13px; font-weight: 700; }
+        .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: #3b82f6; color: white; font-size: 13px; font-weight: 700; flex-shrink: 0; }
         .data-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; border-bottom: 1px solid #1e293b; }
-        .data-key { color: #94a3b8; }
-        .data-val { color: #e2e8f0; font-family: 'Consolas', monospace; word-break: break-all; text-align: right; max-width: 60%; }
+        .data-key { color: #94a3b8; flex-shrink: 0; margin-right: 12px; }
+        .data-val { color: #e2e8f0; font-family: 'Consolas', 'Courier New', monospace; word-break: break-all; text-align: right; }
         .btn { padding: 8px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-blue { background: #3b82f6; color: white; }
         .btn-blue:hover:not(:disabled) { background: #2563eb; }
         .btn-green { background: #10b981; color: white; }
         .btn-green:hover:not(:disabled) { background: #059669; }
-        .btn-red { background: #ef4444; color: white; }
-        .btn-red:hover:not(:disabled) { background: #dc2626; }
         .btn-orange { background: #f59e0b; color: white; }
         .btn-orange:hover:not(:disabled) { background: #d97706; }
+        .btn-sm { padding: 4px 12px; font-size: 12px; }
         .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-        .status-connected { background: #10b981; box-shadow: 0 0 8px #10b981; }
-        .status-disconnected { background: #ef4444; }
-        .status-negotiating { background: #f59e0b; animation: pulse 1s infinite; }
-        .status-connecting { background: #3b82f6; animation: pulse 1s infinite; }
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-        .handshake-arrow { font-size: 18px; font-weight: bold; }
-        .arrow-right { color: #3b82f6; }
-        .arrow-left { color: #10b981; }
+        .st-conn { background: #10b981; box-shadow: 0 0 8px #10b981; }
+        .st-disconn { background: #ef4444; }
+        .st-negot { background: #f59e0b; animation: pulse 1s infinite; }
+        .st-connecting { background: #3b82f6; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-        .tag-syn { background: #1e40af; color: #93c5fd; }
-        .tag-synack { background: #065f46; color: #6ee7b7; }
-        .tag-ack { background: #92400e; color: #fcd34d; }
-        .tag-psk { background: #7c2d12; color: #fdba74; }
-        .input-field { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; color: #e2e8f0; font-size: 14px; width: 100%; }
-        .input-field:focus { outline: none; border-color: #3b82f6; }
-        .key-file { background: #0f172a; border: 1px dashed #475569; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-family: 'Consolas', monospace; color: #94a3b8; }
+        .tag-blue { background: #1e40af; color: #93c5fd; }
+        .tag-green { background: #065f46; color: #6ee7b7; }
+        .tag-yellow { background: #92400e; color: #fcd34d; }
+        .tag-red { background: #991b1b; color: #fca5a5; }
+        .tag-purple { background: #581c87; color: #d8b4fe; }
+        .input { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; color: #e2e8f0; font-size: 14px; width: 100%; }
+        .input:focus { outline: none; border-color: #3b82f6; }
+        .key-file { background: #0f172a; border: 1px dashed #475569; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-family: 'Consolas', monospace; color: #94a3b8; word-break: break-all; }
         .log-area { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; max-height: 300px; overflow-y: auto; font-size: 12px; font-family: 'Consolas', monospace; }
         .log-line { padding: 2px 0; border-bottom: 1px solid #1e293b; }
-        .security-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-        .badge-integrity { background: #065f46; color: #6ee7b7; }
-        .badge-auth { background: #1e40af; color: #93c5fd; }
-        .badge-nonrep { background: #7c2d12; color: #fdba74; }
-        .badge-conf { background: #581c87; color: #d8b4fe; }
-        textarea.input-field { resize: vertical; min-height: 80px; }
+        .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .badge-green { background: #065f46; color: #6ee7b7; }
+        .badge-blue { background: #1e40af; color: #93c5fd; }
+        .badge-orange { background: #7c2d12; color: #fdba74; }
+        .badge-purple { background: #581c87; color: #d8b4fe; }
+        textarea.input { resize: vertical; min-height: 80px; }
+        .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .gap2 { gap: 8px; }
+        .gap4 { gap: 16px; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .flex1 { flex: 1; min-width: 0; }
+        .w24 { width: 96px; }
+        .w20 { width: 80px; }
+        .mb2 { margin-bottom: 8px; }
+        .mb4 { margin-bottom: 16px; }
+        .mt2 { margin-top: 8px; }
+        .mt3 { margin-top: 12px; }
+        .ml-auto { margin-left: auto; }
+        .text-sm { font-size: 14px; }
+        .text-xs { font-size: 12px; }
+        .text-2xl { font-size: 24px; }
+        .font-bold { font-weight: 700; }
+        .font-mono { font-family: 'Consolas', monospace; }
+        .text-slate400 { color: #94a3b8; }
+        .text-slate500 { color: #64748b; }
+        .text-blue400 { color: #60a5fa; }
+        .text-green400 { color: #4ade80; }
+        .text-red400 { color: #f87171; }
+        .text-yellow400 { color: #fbbf24; }
+        .hidden { display: none !important; }
+        .pkt-detail { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px; margin-top: 6px; font-size: 12px; }
+        .pkt-header { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+        .pkt-header:hover { background: #1e293b; border-radius: 4px; padding-left: 4px; }
+        .capture-log-line { padding: 3px 0; font-size: 12px; border-bottom: 1px solid #1e293b; }
+        .capture-log-line .time { color: #475569; }
+        .capture-log-line .event { color: #60a5fa; font-weight: 600; }
+        .capture-log-line .detail { color: #94a3b8; }
     </style>
 </head>
-<body class="min-h-screen p-4">
-    <div class="max-w-7xl mx-auto">
+<body>
+    <div class="container">
         <!-- 标题栏 -->
-        <div class="flex items-center justify-between mb-4">
-            <h1 class="text-xl font-bold flex items-center gap-3">
-                <span class="text-2xl">&#128274;</span> 网络安全传输演示系统
-            </h1>
-            <div class="flex items-center gap-3">
-                <span id="modeLabel" class="tag tag-syn">加载中...</span>
-                <span id="connStatusDot" class="status-dot status-disconnected"></span>
-                <span id="connStatusText" class="text-sm text-slate-400">未连接</span>
+        <div class="flex items-center justify-between mb4">
+            <h1 class="font-bold text-2xl flex items-center gap2"><span>&#128274;</span> 网络安全传输演示系统</h1>
+            <div class="flex items-center gap2">
+                <span id="modeLabel" class="tag tag-blue">加载中...</span>
+                <span id="connDot" class="status-dot st-disconn"></span>
+                <span id="connText" class="text-sm text-slate400">未连接</span>
             </div>
         </div>
 
-        <!-- 本机信息栏 -->
-        <div class="card mb-4">
-            <div class="flex flex-wrap gap-4 text-sm">
-                <div><span class="text-slate-500">主机名:</span> <span id="infoHostname">-</span></div>
-                <div><span class="text-slate-500">IP:</span> <span id="infoIP">-</span></div>
-                <div><span class="text-slate-500">监听端口:</span> <span id="infoPort">-</span></div>
-                <div><span class="text-slate-500">RSA位数:</span> <span id="infoRSA">-</span></div>
-                <div><span class="text-slate-500">数据目录:</span> <span id="infoDataDir" class="font-mono text-xs">-</span></div>
-                <div><span class="text-slate-500">Scapy:</span> <span id="infoScapy">-</span></div>
+        <!-- 本机信息 -->
+        <div class="card mb4">
+            <div class="flex flex-wrap gap4 text-sm">
+                <div><span class="text-slate500">主机名:</span> <span id="infoHost">-</span></div>
+                <div><span class="text-slate500">IP:</span> <span id="infoIP">-</span></div>
+                <div><span class="text-slate500">监听端口:</span> <span id="infoPort">-</span></div>
+                <div><span class="text-slate500">RSA:</span> <span id="infoRSA">-</span></div>
+                <div><span class="text-slate500">数据目录:</span> <span id="infoDir" class="font-mono text-xs">-</span></div>
+                <div><span class="text-slate500">Scapy:</span> <span id="infoScapy">-</span></div>
             </div>
-            <div class="flex flex-wrap gap-4 mt-3">
-                <div class="flex-1 min-w-[250px]">
-                    <div class="text-xs text-slate-500 mb-1">公钥文件</div>
+            <div class="flex flex-wrap gap4 mt3">
+                <div class="flex1" style="min-width:250px">
+                    <div class="text-xs text-slate500 mb2">公钥文件</div>
                     <div id="pubKeyFile" class="key-file">-</div>
                 </div>
-                <div class="flex-1 min-w-[250px]">
-                    <div class="text-xs text-slate-500 mb-1">私钥文件</div>
+                <div class="flex1" style="min-width:250px">
+                    <div class="text-xs text-slate500 mb2">私钥文件</div>
                     <div id="privKeyFile" class="key-file">-</div>
                 </div>
             </div>
-            <div class="mt-2">
-                <span class="text-xs text-slate-500">本机RSA公钥 (e, n):</span>
-                <span id="pubKeyInfo" class="text-xs font-mono text-blue-400">-</span>
-            </div>
+            <div class="mt2"><span class="text-xs text-slate500">RSA公钥 (e, n):</span> <span id="pubKeyInfo" class="text-xs font-mono text-blue400">-</span></div>
         </div>
 
-        <!-- 主面板：左右布局 -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-            <!-- ===== 左侧：发送端 ===== -->
+        <!-- 主面板 -->
+        <div class="grid2">
+            <!-- 左侧：发送端 -->
             <div>
                 <div class="card">
-                    <div class="card-title text-blue-400">
-                        <span>&#128228;</span> 发送端
-                        <span class="security-badge badge-conf">机密性</span>
-                        <span class="security-badge badge-nonrep">不可否认</span>
-                    </div>
+                    <div class="card-title text-blue400">&#128228; 发送端 <span class="badge badge-purple">机密性</span> <span class="badge badge-orange">不可否认</span></div>
 
-                    <!-- 连接区 -->
-                    <div class="mb-4">
-                        <div class="text-sm font-semibold text-slate-300 mb-2">1. 建立连接 & DH密钥协商</div>
-                        <div class="flex gap-2 mb-2">
-                            <input id="targetHost" class="input-field flex-1" placeholder="接收端 IP 地址" value="127.0.0.1">
-                            <input id="targetPort" class="input-field w-24" placeholder="端口" value="9999">
+                    <!-- 1. 连接 -->
+                    <div class="mb4">
+                        <div class="text-sm font-bold mb2">1. 建立连接 &amp; DH密钥协商</div>
+                        <div class="flex gap2 mb2">
+                            <input id="targetHost" class="input flex1" placeholder="接收端 IP 地址" value="127.0.0.1">
+                            <input id="targetPort" class="input w24" placeholder="端口" value="9999">
                             <button id="btnConnect" class="btn btn-blue" onclick="doConnect()">连接</button>
                         </div>
                         <div id="connectResult" class="hidden"></div>
                     </div>
 
-                    <!-- TCP 握手可视化 -->
-                    <div id="handshakePanel" class="mb-4 hidden">
-                        <div class="text-sm font-semibold text-slate-300 mb-2">TCP 三次握手</div>
+                    <!-- TCP 握手 -->
+                    <div id="handshakePanel" class="mb4 hidden">
+                        <div class="text-sm font-bold mb2">TCP 三次握手</div>
                         <div id="handshakeViz" class="step-card"></div>
                     </div>
 
-                    <!-- DH 协商可视化 -->
-                    <div id="dhPanel" class="mb-4 hidden">
-                        <div class="text-sm font-semibold text-slate-300 mb-2">DH 密钥协商 + 数字签名</div>
+                    <!-- DH 协商 -->
+                    <div id="dhPanel" class="mb4 hidden">
+                        <div class="text-sm font-bold mb2">DH 密钥协商 + 数字签名</div>
                         <div id="dhViz" class="step-card"></div>
                     </div>
 
-                    <!-- 抓包区 -->
-                    <div class="mb-4">
-                        <div class="text-sm font-semibold text-slate-300 mb-2">2. 抓取网络数据包</div>
-                        <div class="flex gap-2 mb-2">
-                            <input id="captureCount" class="input-field w-20" placeholder="数量" value="5">
+                    <!-- 2. 抓包 -->
+                    <div class="mb4">
+                        <div class="text-sm font-bold mb2">2. 抓取网络数据包</div>
+                        <div class="flex gap2 mb2">
+                            <input id="captureCount" class="input w20" placeholder="数量" value="5">
                             <button id="btnCapture" class="btn btn-orange" onclick="doCapture()">抓取数据包</button>
                         </div>
                         <div id="captureResult" class="hidden"></div>
                     </div>
 
-                    <!-- 发送区 -->
-                    <div class="mb-2">
-                        <div class="text-sm font-semibold text-slate-300 mb-2">3. 加密并发送</div>
-                        <textarea id="sendData" class="input-field mb-2" placeholder="抓取数据后自动填入，或手动输入..."></textarea>
+                    <!-- 3. 发送 -->
+                    <div>
+                        <div class="text-sm font-bold mb2">3. 加密并发送</div>
+                        <textarea id="sendData" class="input mb2" placeholder="抓取数据后自动填入，或手动输入..."></textarea>
                         <button id="btnSend" class="btn btn-green" onclick="doSend()" disabled>加密并发送</button>
-                        <div id="sendResult" class="mt-3 hidden"></div>
+                        <div id="sendResult" class="mt3 hidden"></div>
                     </div>
                 </div>
             </div>
 
-            <!-- ===== 右侧：接收端 ===== -->
+            <!-- 右侧：接收端 -->
             <div>
                 <div class="card">
-                    <div class="card-title text-green-400">
-                        <span>&#128229;</span> 接收端
-                        <span class="security-badge badge-integrity">完整性</span>
-                        <span class="security-badge badge-auth">真实性</span>
-                    </div>
+                    <div class="card-title text-green400">&#128229; 接收端 <span class="badge badge-green">完整性</span> <span class="badge badge-blue">真实性</span></div>
 
-                    <!-- 连接状态 -->
-                    <div class="mb-4">
-                        <div class="text-sm font-semibold text-slate-300 mb-2">连接状态</div>
-                        <div id="receiverStatus" class="step-card">
-                            <div class="flex items-center gap-2">
-                                <span class="status-dot status-disconnected" id="recvDot"></span>
-                                <span id="recvStatusText" class="text-sm">等待连接...</span>
+                    <div class="mb4">
+                        <div class="text-sm font-bold mb2">连接状态</div>
+                        <div class="step-card">
+                            <div class="flex items-center gap2">
+                                <span id="recvDot" class="status-dot st-disconn"></span>
+                                <span id="recvText" class="text-sm">等待连接...</span>
                             </div>
-                            <div id="recvConnInfo" class="mt-2 text-xs text-slate-500 hidden"></div>
+                            <div id="recvInfo" class="mt2 text-xs text-slate500 hidden"></div>
                         </div>
-                        <button class="btn btn-blue mt-2" onclick="refreshConnection()">刷新状态</button>
+                        <button class="btn btn-blue btn-sm mt2" onclick="refreshConn()">刷新状态</button>
                     </div>
 
-                    <!-- 接收数据 -->
-                    <div class="mb-4">
-                        <div class="flex items-center justify-between mb-2">
-                            <div class="text-sm font-semibold text-slate-300">接收到的数据</div>
-                            <button class="btn btn-blue text-xs py-1 px-3" onclick="refreshReceived()">刷新</button>
+                    <div class="mb4">
+                        <div class="flex items-center justify-between mb2">
+                            <div class="text-sm font-bold">接收到的数据</div>
+                            <button class="btn btn-blue btn-sm" onclick="refreshRecv()">刷新</button>
                         </div>
-                        <div id="receivedList" class="space-y-3">
-                            <div class="text-sm text-slate-500 text-center py-4">暂无接收数据</div>
-                        </div>
+                        <div id="recvList"><div class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div></div>
                     </div>
 
-                    <!-- 算法测试 -->
                     <div>
-                        <button class="btn btn-blue text-xs py-1 px-3" onclick="testAlgo()">测试所有算法</button>
-                        <div id="algoResult" class="mt-2 hidden"></div>
+                        <button class="btn btn-blue btn-sm" onclick="testAlgo()">测试所有算法</button>
+                        <div id="algoResult" class="mt2 hidden"></div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- 操作日志 -->
-        <div class="card mt-4">
-            <div class="card-title text-slate-400">
-                <span>&#128203;</span> 操作日志
-                <button class="btn text-xs py-1 px-3 ml-auto" style="background:#334155;color:#94a3b8" onclick="clearLog()">清空</button>
-            </div>
-            <div id="logArea" class="log-area">
-                <div class="text-slate-500 text-center py-2">等待操作...</div>
-            </div>
+        <!-- 日志 -->
+        <div class="card">
+            <div class="card-title text-slate400">&#128203; 操作日志 <button class="btn btn-sm ml-auto" style="background:#334155;color:#94a3b8" onclick="clearLog()">清空</button></div>
+            <div id="logArea" class="log-area"><div class="text-slate500" style="text-align:center;padding:8px 0">等待操作...</div></div>
         </div>
     </div>
 
 <script>
-// ========== 全局状态 ==========
 let sysInfo = {};
 let capturedData = '';
 
-// ========== 工具函数 ==========
-function log(msg, type='info') {
-    const area = document.getElementById('logArea');
-    const time = new Date().toLocaleTimeString();
-    const colors = { info: '#94a3b8', success: '#10b981', error: '#ef4444', warn: '#f59e0b' };
-    area.innerHTML += `<div class="log-line"><span style="color:#475569">[${time}]</span> <span style="color:${colors[type]||colors.info}">${msg}</span></div>`;
+function log(msg, type) {
+    type = type || 'info';
+    var area = document.getElementById('logArea');
+    var t = new Date().toLocaleTimeString();
+    var c = {info:'#94a3b8',success:'#10b981',error:'#ef4444',warn:'#f59e0b'}[type]||'#94a3b8';
+    area.innerHTML += '<div class="log-line"><span style="color:#475569">['+t+']</span> <span style="color:'+c+'">'+msg+'</span></div>';
     area.scrollTop = area.scrollHeight;
 }
+function clearLog() { document.getElementById('logArea').innerHTML = ''; }
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
 
-function clearLog() {
-    document.getElementById('logArea').innerHTML = '';
-}
+function esc(s) { var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
-function showEl(id) { document.getElementById(id).classList.remove('hidden'); }
-function hideEl(id) { document.getElementById(id).classList.add('hidden'); }
-
-function renderStepData(data) {
+function renderData(data) {
     if (!data) return '';
-    return Object.entries(data).map(([k,v]) => {
-        let val = v;
+    var html = '';
+    for (var k in data) {
+        var v = data[k];
         if (Array.isArray(v)) {
-            val = v.map(item => {
-                if (typeof item === 'object') {
-                    return Object.entries(item).map(([ik,iv]) => `<span class="data-key">${ik}:</span> ${iv}`).join(' | ');
+            var arrHtml = '';
+            for (var i=0; i<v.length; i++) {
+                if (typeof v[i] === 'object') {
+                    arrHtml += '<div style="padding:2px 0">';
+                    for (var ik in v[i]) arrHtml += '<span class="data-key">'+esc(ik)+':</span> '+esc(String(v[i][ik]))+' | ';
+                    arrHtml += '</div>';
+                } else {
+                    arrHtml += '<div>'+esc(String(v[i]))+'</div>';
                 }
-                return item;
-            }).join('<br>');
+            }
+            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val">'+arrHtml+'</span></div>';
+        } else {
+            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val">'+esc(String(v))+'</span></div>';
         }
-        return `<div class="data-row"><span class="data-key">${k}</span><span class="data-val">${val}</span></div>`;
-    }).join('');
+    }
+    return html;
 }
 
-// ========== 加载系统信息 ==========
 async function loadInfo() {
     try {
-        const resp = await fetch('/api/info');
+        var resp = await fetch('/api/info');
         sysInfo = await resp.json();
-
-        document.getElementById('modeLabel').textContent = sysInfo.mode === 'sender' ? '发送端模式' : '接收端模式';
-        document.getElementById('modeLabel').className = 'tag ' + (sysInfo.mode === 'sender' ? 'tag-syn' : 'tag-synack');
-        document.getElementById('infoHostname').textContent = sysInfo.hostname;
+        document.getElementById('modeLabel').textContent = sysInfo.mode==='sender'?'发送端模式':'接收端模式';
+        document.getElementById('modeLabel').className = 'tag '+(sysInfo.mode==='sender'?'tag-blue':'tag-green');
+        document.getElementById('infoHost').textContent = sysInfo.hostname;
         document.getElementById('infoIP').textContent = sysInfo.ip;
         document.getElementById('infoPort').textContent = sysInfo.listen_port;
-        document.getElementById('infoRSA').textContent = sysInfo.rsa_bits + ' 位';
-        document.getElementById('infoDataDir').textContent = sysInfo.data_dir;
-        document.getElementById('infoScapy').textContent = sysInfo.scapy_available ? '可用' : '不可用';
-        document.getElementById('pubKeyFile').textContent = sysInfo.public_key_file || '未生成';
-        document.getElementById('privKeyFile').textContent = sysInfo.private_key_file || '未生成';
-        document.getElementById('pubKeyInfo').textContent = `e=${sysInfo.public_key_e}, n=${sysInfo.public_key_n_hex}...`;
-
-        if (sysInfo.receiver_host && sysInfo.receiver_host !== '127.0.0.1') {
-            document.getElementById('targetHost').value = sysInfo.receiver_host;
-        }
-
-        updateConnectionUI(sysInfo.connection);
-        log('系统信息加载完成', 'success');
-    } catch(e) {
-        log('加载系统信息失败: ' + e.message, 'error');
-    }
+        document.getElementById('infoRSA').textContent = sysInfo.rsa_bits+' 位';
+        document.getElementById('infoDir').textContent = sysInfo.data_dir;
+        document.getElementById('infoScapy').textContent = sysInfo.scapy_available?'可用':'不可用';
+        document.getElementById('pubKeyFile').textContent = sysInfo.public_key_file||'未生成';
+        document.getElementById('privKeyFile').textContent = sysInfo.private_key_file||'未生成';
+        document.getElementById('pubKeyInfo').textContent = 'e='+sysInfo.public_key_e+', n='+sysInfo.public_key_n_hex+'...';
+        if (sysInfo.receiver_host && sysInfo.receiver_host!=='127.0.0.1') document.getElementById('targetHost').value = sysInfo.receiver_host;
+        updateConnUI(sysInfo.connection);
+        log('系统信息加载完成','success');
+    } catch(e) { log('加载失败: '+e.message,'error'); }
 }
 
-function updateConnectionUI(conn) {
-    if (!conn) return;
-    const dot = document.getElementById('connStatusDot');
-    const text = document.getElementById('connStatusText');
-    const recvDot = document.getElementById('recvDot');
-    const recvText = document.getElementById('recvStatusText');
-    const recvInfo = document.getElementById('recvConnInfo');
-
-    const statusMap = {
-        disconnected: { cls: 'status-disconnected', label: '未连接' },
-        connecting: { cls: 'status-connecting', label: '连接中...' },
-        negotiating: { cls: 'status-negotiating', label: '密钥协商中...' },
-        connected: { cls: 'status-connected', label: '已连接' },
-    };
-
-    const s = statusMap[conn.status] || statusMap.disconnected;
-    dot.className = 'status-dot ' + s.cls;
-    text.textContent = s.label;
-    recvDot.className = 'status-dot ' + s.cls;
-    recvText.textContent = s.label;
-
-    if (conn.peer_ip) {
-        recvInfo.classList.remove('hidden');
-        recvInfo.innerHTML = `对方: ${conn.peer_ip}:${conn.peer_port || ''}<br>` +
-            (conn.peer_public_key ? `对方RSA: e=${conn.peer_public_key.e}, ${conn.peer_public_key.n_bits}位<br>` : '') +
-            (conn.session_key ? `会话密钥: ${conn.session_key}<br>HMAC密钥: ${conn.hmac_key}` : '') +
-            (conn.peer_verified !== undefined ? `<br>签名验证: ${conn.peer_verified ? '通过' : '失败'}` : '');
+function updateConnUI(c) {
+    if (!c) return;
+    var map = {disconnected:{cls:'st-disconn',lbl:'未连接'},connecting:{cls:'st-connecting',lbl:'连接中...'},negotiating:{cls:'st-negot',lbl:'密钥协商中...'},connected:{cls:'st-conn',lbl:'已连接'}};
+    var s = map[c.status]||map.disconnected;
+    document.getElementById('connDot').className = 'status-dot '+s.cls;
+    document.getElementById('connText').textContent = s.lbl;
+    document.getElementById('recvDot').className = 'status-dot '+s.cls;
+    document.getElementById('recvText').textContent = s.lbl;
+    var ri = document.getElementById('recvInfo');
+    if (c.peer_ip) {
+        ri.classList.remove('hidden');
+        ri.innerHTML = '对方: '+c.peer_ip+':'+(c.peer_listen_port||c.peer_port||'')+'<br>'+
+            (c.peer_public_key?'对方RSA: e='+c.peer_public_key.e+', '+c.peer_public_key.n_bits+'位<br>':'')+
+            (c.session_key?'会话密钥: '+c.session_key+'<br>HMAC密钥: '+c.hmac_key:'')+
+            (c.peer_verified!==undefined?'<br>签名验证: '+(c.peer_verified?'通过':'失败'):'');
     }
-
-    // 更新发送按钮状态
-    document.getElementById('btnSend').disabled = (conn.status !== 'connected');
+    document.getElementById('btnSend').disabled = (c.status!=='connected');
 }
 
-// ========== 连接 ==========
 async function doConnect() {
-    const host = document.getElementById('targetHost').value.trim();
-    const port = document.getElementById('targetPort').value.trim();
-    if (!host) { log('请输入接收端 IP 地址', 'warn'); return; }
-
-    const btn = document.getElementById('btnConnect');
-    btn.disabled = true;
-    btn.textContent = '连接中...';
-    log(`正在连接 ${host}:${port} ...`, 'info');
-
+    var host = document.getElementById('targetHost').value.trim();
+    var port = document.getElementById('targetPort').value.trim();
+    if (!host) { log('请输入接收端IP','warn'); return; }
+    var btn = document.getElementById('btnConnect');
+    btn.disabled = true; btn.textContent = '连接中...';
+    log('正在连接 '+host+':'+port+' ...','info');
     try {
-        const resp = await fetch('/api/connect', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({host, port: parseInt(port)})
-        });
-        const result = await resp.json();
-
-        if (result.success) {
-            log('连接成功！密钥协商完成', 'success');
-            showEl('connectResult');
-            renderConnectResult(result);
-        } else {
-            log('连接失败: ' + (result.error || '未知错误'), 'error');
-            if (result.steps && result.steps.length > 0) {
-                showEl('connectResult');
-                renderConnectResult(result);
-            }
-        }
-    } catch(e) {
-        log('连接请求失败: ' + e.message, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '连接';
-        loadInfo();
-    }
+        var resp = await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
+        var r = await resp.json();
+        if (r.success) { log('连接成功！密钥协商完成','success'); show('connectResult'); renderConnect(r); }
+        else { log('连接失败: '+(r.error||'未知错误'),'error'); if(r.steps&&r.steps.length>0){show('connectResult');renderConnect(r);} }
+    } catch(e) { log('请求失败: '+e.message,'error'); }
+    finally { btn.disabled=false; btn.textContent='连接'; loadInfo(); }
 }
 
-function renderConnectResult(result) {
-    const el = document.getElementById('connectResult');
-    let html = '';
-    (result.steps || []).forEach(step => {
-        html += `<div class="step-card">
-            <div class="flex items-center gap-2 mb-2">
-                <span class="step-num">${step.id}</span>
-                <span class="font-semibold text-sm">${step.title}</span>
-            </div>
-            <div class="text-xs text-slate-400 mb-2">${step.description || ''}</div>
-            ${renderStepData(step.data)}
-        </div>`;
-
-        // TCP 握手可视化
-        if (step.id === 1 && step.data && step.data['握手过程']) {
-            showEl('handshakePanel');
-            renderHandshake(step.data['握手过程']);
-        }
-
-        // DH 协商可视化
-        if (step.id === 2) {
-            showEl('dhPanel');
-            renderDH(step);
-        }
+function renderConnect(r) {
+    var html = '';
+    (r.steps||[]).forEach(function(step) {
+        html += '<div class="step-card"><div class="flex items-center gap2 mb2"><span class="step-num">'+step.id+'</span><span class="font-bold text-sm">'+esc(step.title)+'</span></div><div class="text-xs text-slate400 mb2">'+esc(step.description||'')+'</div>'+renderData(step.data)+'</div>';
+        if (step.id===1 && step.data && step.data['握手过程']) { show('handshakePanel'); renderHandshake(step.data['握手过程']); }
+        if (step.id===2) { show('dhPanel'); renderDH(step); }
     });
-    el.innerHTML = html;
+    document.getElementById('connectResult').innerHTML = html;
 }
 
 function renderHandshake(steps) {
-    const el = document.getElementById('handshakeViz');
-    let html = '<div class="flex flex-col gap-2">';
-    steps.forEach(s => {
-        const tagClass = s.flag === 'SYN' ? 'tag-syn' : s.flag === 'SYN+ACK' ? 'tag-synack' : 'tag-ack';
-        const arrowClass = s.dir === '→' ? 'arrow-right' : 'arrow-left';
-        html += `<div class="flex items-center gap-3 text-sm">
-            <span class="handshake-arrow ${arrowClass}">${s.dir === '→' ? '&#10145;' : '&#11013;'}</span>
-            <span class="tag ${tagClass}">${s.flag}</span>
-            <span class="text-slate-400 text-xs">${s.from} &#8594; ${s.to}</span>
-            <span class="text-slate-500 text-xs">${s.desc}</span>
-        </div>`;
+    var html = '<div style="display:flex;flex-direction:column;gap:8px">';
+    steps.forEach(function(s) {
+        var tc = s.flag==='SYN'?'tag-blue':s.flag==='SYN+ACK'?'tag-green':'tag-yellow';
+        var arrow = s.dir==='→'?'&#10145;':'&#11013;';
+        html += '<div class="flex items-center gap2 text-sm"><span style="font-size:18px">'+arrow+'</span><span class="tag '+tc+'">'+esc(s.flag)+'</span><span class="text-xs text-slate400">'+esc(s.from)+' &#8594; '+esc(s.to)+'</span><span class="text-xs text-slate500">'+esc(s.desc)+'</span></div>';
     });
     html += '</div>';
-    el.innerHTML = html;
+    document.getElementById('handshakeViz').innerHTML = html;
 }
 
 function renderDH(step) {
-    const el = document.getElementById('dhViz');
-    let html = `<div class="text-xs space-y-2">
-        <div class="flex items-center gap-2">
-            <span class="handshake-arrow arrow-right">&#10145;</span>
-            <span class="tag tag-syn">发送</span>
-            <span class="text-slate-400">本方 DH 公钥 + RSA 私钥签名</span>
-        </div>
-        <div class="flex items-center gap-2">
-            <span class="handshake-arrow arrow-left">&#11013;</span>
-            <span class="tag tag-synack">接收</span>
-            <span class="text-slate-400">对方 DH 公钥 + RSA 私钥签名</span>
-        </div>
-        <div class="flex items-center gap-2">
-            <span class="handshake-arrow arrow-right">&#10145;</span>
-            <span class="tag tag-ack">验证</span>
-            <span class="text-slate-400">用对方 RSA 公钥验证签名</span>
-        </div>
-        ${renderStepData(step.data)}
-    </div>`;
-    el.innerHTML = html;
+    var html = '<div class="text-xs" style="display:flex;flex-direction:column;gap:8px"><div class="flex items-center gap2"><span style="font-size:18px">&#10145;</span><span class="tag tag-blue">发送</span><span class="text-slate400">本方 DH 公钥 + RSA 私钥签名</span></div><div class="flex items-center gap2"><span style="font-size:18px">&#11013;</span><span class="tag tag-green">接收</span><span class="text-slate400">对方 DH 公钥 + RSA 私钥签名</span></div><div class="flex items-center gap2"><span style="font-size:18px">&#10145;</span><span class="tag tag-yellow">验证</span><span class="text-slate400">用对方 RSA 公钥验证签名</span></div>'+renderData(step.data)+'</div>';
+    document.getElementById('dhViz').innerHTML = html;
 }
 
-// ========== 抓包 ==========
 async function doCapture() {
-    const count = parseInt(document.getElementById('captureCount').value) || 5;
-    const btn = document.getElementById('btnCapture');
-    btn.disabled = true;
-    btn.textContent = '抓取中...';
-    log(`开始抓取 ${count} 个数据包...`, 'info');
-
+    var count = parseInt(document.getElementById('captureCount').value)||5;
+    var btn = document.getElementById('btnCapture');
+    btn.disabled=true; btn.textContent='抓取中...';
+    log('开始抓取 '+count+' 个数据包...','info');
     try {
-        const resp = await fetch('/api/capture', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({count, timeout: 20})
-        });
-        const result = await resp.json();
-
-        if (result.success) {
-            capturedData = result.json_data;
+        var resp = await fetch('/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:count,timeout:20})});
+        var r = await resp.json();
+        if (r.success) {
+            capturedData = r.json_data;
             document.getElementById('sendData').value = capturedData;
-            log(`抓取成功！共 ${result.count} 个数据包，已保存到 ${result.saved_to}`, 'success');
-
-            showEl('captureResult');
-            let html = `<div class="step-card">
-                <div class="data-row"><span class="data-key">数据包数量</span><span class="data-val">${result.count}</span></div>
-                <div class="data-row"><span class="data-key">保存位置</span><span class="data-val">${result.saved_to}</span></div>
-            </div>`;
-
-            // 显示每个数据包摘要
-            (result.packets || []).forEach((p, i) => {
-                html += `<div class="step-card text-xs">
-                    <span class="text-blue-400">包${i+1}</span>
-                    <span class="text-slate-400 ml-2">${p.summary || p.src || '-'}</span>
-                </div>`;
-            });
-
-            document.getElementById('captureResult').innerHTML = html;
-        } else {
-            log('抓取失败: ' + (result.error || '未知错误'), 'error');
-        }
-    } catch(e) {
-        log('抓取请求失败: ' + e.message, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '抓取数据包';
-    }
+            log('抓取成功！共 '+r.count+' 个数据包，已保存到 '+r.saved_to,'success');
+            show('captureResult');
+            renderCapture(r);
+        } else { log('抓取失败: '+(r.error||''),'error'); }
+    } catch(e) { log('请求失败: '+e.message,'error'); }
+    finally { btn.disabled=false; btn.textContent='抓取数据包'; }
 }
 
-// ========== 加密发送 ==========
-async function doSend() {
-    const data = document.getElementById('sendData').value.trim();
-    if (!data) { log('没有可发送的数据', 'warn'); return; }
+function renderCapture(r) {
+    var html = '';
 
-    const btn = document.getElementById('btnSend');
-    btn.disabled = true;
-    btn.textContent = '加密发送中...';
-    log('正在加密并发送数据...', 'info');
-
-    try {
-        const resp = await fetch('/api/send', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({data})
+    // 抓包过程日志
+    if (r.capture_log && r.capture_log.length>0) {
+        html += '<div class="step-card"><div class="font-bold text-sm mb2" style="color:#f59e0b">&#128270; 抓包过程</div>';
+        r.capture_log.forEach(function(entry) {
+            var ec = {init:'#60a5fa',interface:'#a78bfa',start:'#f59e0b',packet:'#10b981',done:'#3b82f6',error:'#ef4444'}[entry.event]||'#94a3b8';
+            html += '<div class="capture-log-line"><span class="time">['+esc(entry.time)+']</span> <span class="event" style="color:'+ec+'">['+esc(entry.event)+']</span> <span class="detail">'+esc(entry.detail)+'</span></div>';
         });
-        const result = await resp.json();
+        html += '</div>';
+    }
 
-        if (result.success) {
-            log('数据加密发送成功！', 'success');
-        } else {
-            log('发送失败: ' + (result.error || '未知错误'), 'error');
-        }
+    // 数据包摘要
+    html += '<div class="step-card"><div class="data-row"><span class="data-key">数据包数量</span><span class="data-val">'+r.count+'</span></div><div class="data-row"><span class="data-key">保存位置</span><span class="data-val">'+esc(r.saved_to)+'</span></div></div>';
 
-        showEl('sendResult');
-        let html = '';
-        (result.steps || []).forEach(step => {
-            html += `<div class="step-card">
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="step-num">${step.id}</span>
-                    <span class="font-semibold text-sm">${step.title}</span>
-                </div>
-                <div class="text-xs text-slate-400 mb-2">${step.description || ''}</div>
-                ${renderStepData(step.data)}
-            </div>`;
+    // 每个数据包详情
+    (r.packets||[]).forEach(function(p) {
+        var protoColor = {TCP:'#60a5fa',UDP:'#4ade80',ICMP:'#fbbf24',ARP:'#c084fc'}[p.protocol]||'#94a3b8';
+        html += '<div class="step-card">';
+        html += '<div class="pkt-header" onclick="togglePkt(\'pkt_'+p.id+'\')">';
+        html += '<span class="step-num" style="width:22px;height:22px;font-size:11px;background:'+protoColor+'">'+p.id+'</span>';
+        html += '<span class="tag" style="background:'+protoColor+'22;color:'+protoColor+'">'+esc(p.protocol)+'</span>';
+        html += '<span class="text-xs text-slate400" style="flex:1">'+esc(p.summary||'')+'</span>';
+        html += '<span class="text-xs text-slate500">'+p.length+'B</span>';
+        html += '</div>';
+
+        html += '<div id="pkt_'+p.id+'" class="pkt-detail hidden">';
+        // 以太网层
+        if (p.src_mac) html += '<div style="color:#a78bfa;font-weight:600;margin-bottom:4px">以太网层</div><div class="data-row"><span class="data-key">源MAC</span><span class="data-val">'+esc(p.src_mac)+'</span></div><div class="data-row"><span class="data-key">目标MAC</span><span class="data-val">'+esc(p.dst_mac)+'</span></div><div class="data-row"><span class="data-key">类型</span><span class="data-val">'+esc(p.ether_type)+'</span></div>';
+        // IP层
+        if (p.src_ip) html += '<div style="color:#60a5fa;font-weight:600;margin:6px 0 4px">IP层</div><div class="data-row"><span class="data-key">源IP</span><span class="data-val">'+esc(p.src_ip)+'</span></div><div class="data-row"><span class="data-key">目标IP</span><span class="data-val">'+esc(p.dst_ip)+'</span></div><div class="data-row"><span class="data-key">TTL</span><span class="data-val">'+p.ttl+'</span></div><div class="data-row"><span class="data-key">IP标志</span><span class="data-val">'+esc(p.ip_flags)+'</span></div><div class="data-row"><span class="data-key">IP ID</span><span class="data-val">'+p.ip_id+'</span></div>';
+        // TCP层
+        if (p.protocol==='TCP') html += '<div style="color:#4ade80;font-weight:600;margin:6px 0 4px">TCP层</div><div class="data-row"><span class="data-key">源端口</span><span class="data-val">'+esc(p.src_port)+'</span></div><div class="data-row"><span class="data-key">目标端口</span><span class="data-val">'+esc(p.dst_port)+'</span></div><div class="data-row"><span class="data-key">标志位</span><span class="data-val" style="color:#fbbf24">'+esc(p.tcp_flags)+'</span></div><div class="data-row"><span class="data-key">序列号</span><span class="data-val">'+p.seq_num+'</span></div><div class="data-row"><span class="data-key">确认号</span><span class="data-val">'+p.ack_num+'</span></div><div class="data-row"><span class="data-key">窗口大小</span><span class="data-val">'+p.window_size+'</span></div>'+(p.tcp_options?'<div class="data-row"><span class="data-key">TCP选项</span><span class="data-val">'+esc(p.tcp_options)+'</span></div>':'');
+        // UDP层
+        if (p.protocol==='UDP') html += '<div style="color:#4ade80;font-weight:600;margin:6px 0 4px">UDP层</div><div class="data-row"><span class="data-key">源端口</span><span class="data-val">'+esc(p.src_port)+'</span></div><div class="data-row"><span class="data-key">目标端口</span><span class="data-val">'+esc(p.dst_port)+'</span></div>';
+        // 载荷
+        if (p.payload_length>0) html += '<div style="color:#f87171;font-weight:600;margin:6px 0 4px">载荷 ('+p.payload_length+'字节)</div><div class="data-row"><span class="data-key">Hex</span><span class="data-val" style="font-size:10px;max-height:60px;overflow:hidden">'+esc(p.payload_hex.substring(0,200))+'...</span></div>'+(p.payload?'<div class="data-row"><span class="data-key">文本</span><span class="data-val">'+esc(p.payload.substring(0,100))+'</span></div>':'');
+        html += '</div></div>';
+    });
+
+    document.getElementById('captureResult').innerHTML = html;
+}
+
+function togglePkt(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden');
+}
+
+async function doSend() {
+    var data = document.getElementById('sendData').value.trim();
+    if (!data) { log('没有可发送的数据','warn'); return; }
+    var btn = document.getElementById('btnSend');
+    btn.disabled=true; btn.textContent='加密发送中...';
+    log('正在加密并发送数据...','info');
+    try {
+        var resp = await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:data})});
+        var r = await resp.json();
+        if (r.success) log('数据加密发送成功！','success');
+        else log('发送失败: '+(r.error||''),'error');
+        show('sendResult');
+        var html = '';
+        (r.steps||[]).forEach(function(s) {
+            html += '<div class="step-card"><div class="flex items-center gap2 mb2"><span class="step-num">'+s.id+'</span><span class="font-bold text-sm">'+esc(s.title)+'</span></div><div class="text-xs text-slate400 mb2">'+esc(s.description||'')+'</div>'+renderData(s.data)+'</div>';
         });
         document.getElementById('sendResult').innerHTML = html;
-
-    } catch(e) {
-        log('发送请求失败: ' + e.message, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '加密并发送';
-        loadInfo();
-    }
+    } catch(e) { log('请求失败: '+e.message,'error'); }
+    finally { btn.disabled=false; btn.textContent='加密并发送'; loadInfo(); }
 }
 
-// ========== 接收端 ==========
-async function refreshReceived() {
+async function refreshRecv() {
     try {
-        const resp = await fetch('/api/received_data');
-        const result = await resp.json();
-        const el = document.getElementById('receivedList');
-
-        if (result.count === 0) {
-            el.innerHTML = '<div class="text-sm text-slate-500 text-center py-4">暂无接收数据</div>';
-            return;
-        }
-
-        let html = '';
-        result.data.forEach((item, i) => {
+        var resp = await fetch('/api/received_data');
+        var r = await resp.json();
+        var el = document.getElementById('recvList');
+        if (r.count===0) { el.innerHTML='<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div>'; return; }
+        var html = '';
+        r.data.forEach(function(item,i) {
             if (item.hmac_valid) {
-                html += `<div class="step-card">
-                    <div class="flex items-center gap-2 mb-2">
-                        <span class="step-num">${i+1}</span>
-                        <span class="font-semibold text-sm text-green-400">验证通过</span>
-                        <span class="text-xs text-slate-500">${item.time}</span>
-                    </div>
-                    <div class="data-row"><span class="data-key">HMAC验证</span><span class="data-val" style="color:#10b981">通过 (完整性保证)</span></div>
-                    <div class="data-row"><span class="data-key">解密数据</span><span class="data-val">${(item.decrypted_data||'').substring(0,200)}${(item.decrypted_data||'').length>200?'...':''}</span></div>
-                    <div class="data-row"><span class="data-key">会话密钥</span><span class="data-val">${item.session_key_hex||'-'}</span></div>
-                    <div class="data-row"><span class="data-key">HMAC密钥</span><span class="data-val">${item.hmac_key_hex||'-'}</span></div>
-                    <div class="data-row"><span class="data-key">IV</span><span class="data-val">${item.iv_hex||'-'}</span></div>
-                    <div class="data-row"><span class="data-key">保存位置</span><span class="data-val">${item.saved_to||'-'}</span></div>
-                </div>`;
+                html += '<div class="step-card"><div class="flex items-center gap2 mb2"><span class="step-num">'+(i+1)+'</span><span class="font-bold text-sm text-green400">验证通过</span><span class="text-xs text-slate500">'+esc(item.time)+'</span></div><div class="data-row"><span class="data-key">HMAC验证</span><span class="data-val" style="color:#10b981">通过 (完整性)</span></div><div class="data-row"><span class="data-key">解密数据</span><span class="data-val">'+esc((item.decrypted_data||'').substring(0,200))+'</span></div><div class="data-row"><span class="data-key">会话密钥</span><span class="data-val">'+esc(item.session_key_hex||'-')+'</span></div><div class="data-row"><span class="data-key">HMAC密钥</span><span class="data-val">'+esc(item.hmac_key_hex||'-')+'</span></div><div class="data-row"><span class="data-key">保存位置</span><span class="data-val">'+esc(item.saved_to||'-')+'</span></div></div>';
             } else {
-                html += `<div class="step-card" style="border-color:#ef4444">
-                    <div class="flex items-center gap-2 mb-2">
-                        <span class="step-num" style="background:#ef4444">${i+1}</span>
-                        <span class="font-semibold text-sm text-red-400">验证失败</span>
-                        <span class="text-xs text-slate-500">${item.time}</span>
-                    </div>
-                    <div class="text-red-400 text-sm">${item.error || 'HMAC验证失败，数据可能被篡改！'}</div>
-                </div>`;
+                html += '<div class="step-card" style="border-color:#ef4444"><div class="flex items-center gap2 mb2"><span class="step-num" style="background:#ef4444">'+(i+1)+'</span><span class="font-bold text-sm text-red400">验证失败</span><span class="text-xs text-slate500">'+esc(item.time)+'</span></div><div class="text-red400 text-sm">'+esc(item.error||'HMAC验证失败')+'</div></div>';
             }
         });
         el.innerHTML = html;
-        log(`已刷新接收数据，共 ${result.count} 条`, 'info');
-    } catch(e) {
-        log('刷新接收数据失败: ' + e.message, 'error');
-    }
+        log('已刷新，共 '+r.count+' 条','info');
+    } catch(e) { log('刷新失败: '+e.message,'error'); }
 }
 
-async function refreshConnection() {
+async function refreshConn() {
     try {
-        const resp = await fetch('/api/connection_status');
-        const conn = await resp.json();
-        updateConnectionUI(conn);
-        log('连接状态已刷新', 'info');
-    } catch(e) {
-        log('刷新连接状态失败: ' + e.message, 'error');
-    }
+        var resp = await fetch('/api/connection_status');
+        var c = await resp.json();
+        updateConnUI(c);
+        log('连接状态已刷新','info');
+    } catch(e) { log('刷新失败: '+e.message,'error'); }
 }
 
-// ========== 算法测试 ==========
 async function testAlgo() {
-    log('正在测试所有算法...', 'info');
+    log('正在测试所有算法...','info');
     try {
-        const resp = await fetch('/api/test_algo', { method: 'POST' });
-        const result = await resp.json();
-        showEl('algoResult');
-        let html = '<div class="grid grid-cols-2 gap-2">';
-        Object.entries(result).forEach(([name, status]) => {
-            const isPass = status === 'PASS';
-            html += `<div class="step-card text-center text-sm">
-                <div class="font-semibold ${isPass ? 'text-green-400' : 'text-red-400'}">${name}</div>
-                <div class="${isPass ? 'text-green-400' : 'text-red-400'}">${isPass ? 'PASS' : status}</div>
-            </div>`;
-        });
+        var resp = await fetch('/api/test_algo',{method:'POST'});
+        var r = await resp.json();
+        show('algoResult');
+        var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+        for (var name in r) {
+            var pass = r[name]==='PASS';
+            html += '<div class="step-card" style="text-align:center"><div class="font-bold '+(pass?'text-green400':'text-red400')+'">'+esc(name)+'</div><div class="'+(pass?'text-green400':'text-red400')+'">'+(pass?'PASS':esc(r[name]))+'</div></div>';
+        }
         html += '</div>';
         document.getElementById('algoResult').innerHTML = html;
-        log('算法测试完成', 'success');
-    } catch(e) {
-        log('算法测试失败: ' + e.message, 'error');
-    }
+        log('算法测试完成','success');
+    } catch(e) { log('测试失败: '+e.message,'error'); }
 }
 
-// ========== 自动刷新 ==========
-setInterval(() => {
-    refreshConnection();
-    if (sysInfo.connection && sysInfo.connection.status === 'connected') {
-        refreshReceived();
-    }
+setInterval(function() {
+    refreshConn();
+    if (sysInfo.connection && sysInfo.connection.status==='connected') refreshRecv();
 }, 3000);
 
-// ========== 初始化 ==========
 loadInfo();
 </script>
 </body>

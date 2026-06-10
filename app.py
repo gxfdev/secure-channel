@@ -456,15 +456,15 @@ def _recv_exact(sock, n, timeout=15):
 
 @app.route('/api/capture', methods=['POST'])
 def api_capture():
-    """抓取网络数据包"""
+    """抓取网络数据包（详细版，包含抓包过程日志）"""
     try:
         count = request.json.get('count', 10) if request.is_json else 10
         timeout = request.json.get('timeout', 15) if request.is_json else 15
 
-        packets = capture_packets(count=count, timeout=timeout)
+        packets, capture_log = capture_packets(count=count, timeout=timeout)
 
         if not packets:
-            return jsonify({'success': False, 'error': '未抓取到任何数据包'})
+            return jsonify({'success': False, 'error': '未抓取到任何数据包', 'capture_log': capture_log})
 
         # 保存到文件
         json_data = packets_to_json(packets)
@@ -478,7 +478,8 @@ def api_capture():
             'packets': packets,
             'count': len(packets),
             'json_data': json_data,
-            'saved_to': os.path.abspath(filepath)
+            'saved_to': os.path.abspath(filepath),
+            'capture_log': capture_log
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
