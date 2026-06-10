@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # ==================== 发送端 ====================
+  sender:
+    build: .
+    container_name: netsec-sender
+    environment:
+      - MODE=sender
+      - RECEIVER_HOST=${RECEIVER_HOST:-192.168.1.100}  # 修改为接收端VM的IP
+      - RECEIVER_PORT=9999
+      - RSA_BITS=512
+      - DATA_DIR=/app/captured_data
+    ports:
+      - "5000:5000"     # Web管理界面
+    volumes:
+      - sender_data:/app/captured_data  # 数据包存储
+    network_mode: host   # 使用主机网络，以便抓包和直连
+    cap_add:
+      - NET_ADMIN        # 允许网络管理（scapy抓包需要）
+      - NET_RAW          # 允许原始套接字
+    restart: unless-stopped
+
+  # ==================== 接收端 ====================
+  receiver:
+    build: .
+    container_name: netsec-receiver
+    environment:
+      - MODE=receiver
+      - LISTEN_PORT=9999
+      - RSA_BITS=512
+      - DATA_DIR=/app/captured_data
+    ports:
+      - "5000:5000"     # Web管理界面
+      - "9999:9999"     # 数据接收端口
+    volumes:
+      - receiver_data:/app/captured_data  # 数据包存储
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+volumes:
+  sender_data:
+  receiver_data:
