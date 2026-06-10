@@ -7,7 +7,7 @@ services:
     container_name: netsec-sender
     environment:
       - MODE=sender
-      - RECEIVER_HOST=${RECEIVER_HOST:-192.168.1.100}  # 修改为接收端VM的IP
+      - RECEIVER_HOST=${RECEIVER_HOST:?请在.env文件或命令行设置RECEIVER_HOST为接收端VM的IP}
       - RECEIVER_PORT=9999
       - RSA_BITS=512
       - DATA_DIR=/app/captured_data

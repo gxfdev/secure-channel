@@ -58,21 +58,24 @@ docker run -d --name netsec-receiver \
   -e MODE=receiver \
   ghcr.io/gxfdev/secure-channel:main
 
-# 发送端 VM
+# 发送端 VM（将 <接收端IP> 替换为接收端 VM 的实际 IP 地址）
 docker run -d --name netsec-sender \
   --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
   -v /home/user/captured_data:/app/captured_data \
   -e MODE=sender \
-  -e RECEIVER_HOST=192.168.1.100 \
+  -e RECEIVER_HOST=<接收端IP> \
   ghcr.io/gxfdev/secure-channel:main
 ```
 
 ### 方式二：Docker Compose
 
 ```bash
-# 修改 docker-compose.yml 中 RECEIVER_HOST 为接收端 VM 的 IP
-docker compose up -d
+# 创建 .env 文件设置接收端 IP
+echo "RECEIVER_HOST=<接收端IP>" > .env
+
+# 或通过命令行指定
+RECEIVER_HOST=<接收端IP> docker compose up -d
 ```
 
 ### 方式三：直接运行
@@ -84,8 +87,8 @@ pip install -r requirements.txt
 # 接收端
 MODE=receiver python app.py
 
-# 发送端
-MODE=sender RECEIVER_HOST=192.168.1.100 python app.py
+# 发送端（将 <接收端IP> 替换为接收端的实际 IP）
+MODE=sender RECEIVER_HOST=<接收端IP> python app.py
 ```
 
 ## 使用说明
