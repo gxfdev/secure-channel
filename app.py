@@ -470,9 +470,9 @@ def api_capture():
         if not packets:
             return jsonify({'success': False, 'error': '未抓取到任何数据包', 'capture_log': capture_log})
 
-        # 保存到文件
+        # 保存到文件（使用毫秒级时间戳避免文件名冲突）
         json_data = packets_to_json(packets)
-        filename = f"capture_{int(time.time())}.json"
+        filename = f"capture_{int(time.time()*1000)}.json"
         filepath = os.path.join(DATA_DIR, filename)
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(json_data)
@@ -483,6 +483,7 @@ def api_capture():
             'count': len(packets),
             'json_data': json_data,
             'saved_to': os.path.abspath(filepath),
+            'filename': filename,
             'capture_log': capture_log
         })
     except Exception as e:
@@ -612,6 +613,38 @@ def api_send():
 @app.route('/api/received_data')
 def get_received_data():
     return jsonify({'count': len(_received_data), 'data': _received_data})
+
+
+@app.route('/api/data_files')
+def list_data_files():
+    """列出所有抓包数据文件和接收数据文件"""
+    files = []
+    data_dir = os.path.abspath(DATA_DIR)
+    if os.path.isdir(data_dir):
+        for f in sorted(os.listdir(data_dir), reverse=True):
+            fp = os.path.join(data_dir, f)
+            if os.path.isfile(fp):
+                stat = os.stat(fp)
+                files.append({
+                    'name': f,
+                    'path': fp,
+                    'size': stat.st_size,
+                    'size_human': f"{stat.st_size / 1024:.1f}KB" if stat.st_size > 1024 else f"{stat.st_size}B",
+                    'modified': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stat.st_mtime)),
+                    'type': 'capture' if f.startswith('capture_') else 'received' if f.startswith('received_') else 'other'
+                })
+    return jsonify({'data_dir': data_dir, 'files': files, 'total': len(files)})
+
+
+@app.route('/api/data_files/<filename>')
+def get_data_file(filename):
+    """查看指定数据文件内容"""
+    filepath = os.path.join(DATA_DIR, filename)
+    if not os.path.isfile(filepath):
+        return jsonify({'error': '文件不存在'}), 404
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    return jsonify({'filename': filename, 'path': os.path.abspath(filepath), 'content': content})
 
 
 @app.route('/api/connection_status')

@@ -50,15 +50,79 @@
 - 防火墙开放 5000/tcp（Web界面）和 9999/tcp（数据传输）
 - Docker 已安装
 
-### 方式一：Docker 部署（推荐）
+### 镜像拉取
+
+#### 直接拉取
+
+```bash
+docker pull ghcr.io/gxfdev/secure-channel:main
+```
+
+#### 通过代理拉取（国内加速）
+
+如果直接拉取 GHCR 镜像速度过慢，可通过以下方式配置代理：
+
+**方式一：配置 Docker Daemon 代理**
+
+```bash
+# 创建 Docker 代理配置目录
+sudo mkdir -p /etc/systemd/system/docker.service.d
+
+# 创建代理配置文件（将代理地址替换为你自己的）
+sudo cat > /etc/systemd/system/docker.service.d/proxy.conf << 'EOF'
+[Service]
+Environment="HTTP_PROXY=http://你的代理地址:端口"
+Environment="HTTPS_PROXY=http://你的代理地址:端口"
+Environment="NO_PROXY=localhost,127.0.0.1,192.168.*"
+EOF
+
+# 重载配置并重启 Docker
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+# 验证代理配置
+docker info | grep -i proxy
+```
+
+**方式二：临时使用代理拉取**
+
+```bash
+# 在拉取命令前设置环境变量
+HTTP_PROXY=http://你的代理地址:端口 HTTPS_PROXY=http://你的代理地址:端口 \
+  docker pull ghcr.io/gxfdev/secure-channel:main
+```
+
+**方式三：使用国内镜像加速**
+
+```bash
+# 配置 Docker 镜像加速器
+sudo cat > /etc/docker/daemon.json << 'EOF'
+{
+  "registry-mirrors": [
+    "https://mirror.ccs.tencentyun.com",
+    "https://docker.mirrors.ustc.edu.cn"
+  ]
+}
+EOF
+
+sudo systemctl restart docker
+```
+
+**方式四：本地构建镜像（无需拉取）**
+
+```bash
+# 克隆仓库后本地构建
+git clone https://github.com/gxfdev/secure-channel.git
+cd secure-channel
+docker build -t secure-channel:local .
+```
+
+### 部署运行
 
 > **重要**: 必须使用 `--network host` 模式运行容器，否则跨主机通信和抓包功能不可用。
 > Flask 默认监听 `0.0.0.0:5000`，确保外部主机可访问。
 
 ```bash
-# 拉取镜像
-docker pull ghcr.io/gxfdev/secure-channel:main
-
 # ========== 接收端 VM ==========
 docker run -d --name netsec-receiver \
   --network host \
@@ -91,7 +155,7 @@ curl http://<接收端IP>:5000/
 # 应返回 HTML 内容
 ```
 
-### 方式二：Docker Compose
+### Docker Compose 部署
 
 ```bash
 # 创建 .env 文件设置接收端 IP
@@ -101,7 +165,7 @@ echo "RECEIVER_HOST=<接收端IP>" > .env
 RECEIVER_HOST=<接收端IP> docker compose up -d
 ```
 
-### 方式三：直接运行
+### 直接运行（无 Docker）
 
 ```bash
 # 安装依赖
@@ -114,15 +178,136 @@ MODE=receiver FLASK_HOST=0.0.0.0 python app.py
 MODE=sender RECEIVER_HOST=<接收端IP> FLASK_HOST=0.0.0.0 python app.py
 ```
 
-### 跨主机通信排查
+## 数据存储说明
 
-如果发送端无法访问接收端 Web 界面，按以下步骤排查：
+### 存储路径
 
-1. **确认 Flask 监听地址**: `docker logs <容器名> | grep "Running on"`，必须显示 `0.0.0.0:5000`
-2. **确认防火墙**: `firewall-cmd --list-ports` 或 `iptables -L -n`，确保 5000/tcp 和 9999/tcp 开放
-3. **确认网络互通**: `ping <对方IP>` 测试基础连通性
-4. **确认 SELinux**: 临时关闭 `setenforce 0`，或永久配置
-5. **确认 Docker 网络模式**: 必须使用 `--network host`
+| 数据类型 | 容器内路径 | 宿主机挂载路径 | 文件命名规则 |
+|----------|-----------|---------------|-------------|
+| 抓包数据 | `/app/captured_data/capture_*.json` | 通过 `-v` 参数指定 | `capture_{毫秒时间戳}.json` |
+| 接收数据 | `/app/captured_data/received_*.json` | 通过 `-v` 参数指定 | `received_{毫秒时间戳}.json` |
+| RSA 密钥 | `/app/captured_data/rsa_key_*.pem` | 通过 `-v` 参数指定 | `rsa_key_pub.pem` / `rsa_key_priv.pem` |
+
+### 查看数据文件
+
+**方式一：通过 Web 界面**
+
+访问 `http://主机IP:5000/api/data_files` 可查看所有数据文件列表，访问 `http://主机IP:5000/api/data_files/{文件名}` 可查看具体文件内容。
+
+**方式二：通过命令行**
+
+```bash
+# 查看容器内的数据文件
+docker exec netsec-receiver ls -la /app/captured_data/
+
+# 查看具体文件内容
+docker exec netsec-receiver cat /app/captured_data/capture_xxx.json
+
+# 如果挂载了卷，直接在宿主机查看
+ls -la /home/user/captured_data/
+cat /home/user/captured_data/capture_xxx.json
+
+# 用 jq 格式化查看（如果安装了 jq）
+cat /home/user/captured_data/capture_xxx.json | python -m json.tool
+```
+
+**方式三：复制到宿主机**
+
+```bash
+# 从容器复制数据文件到宿主机
+docker cp netsec-receiver:/app/captured_data/ ./local_data/
+```
+
+### 数据文件格式
+
+每个抓包文件为 JSON 格式，包含数据包数组：
+
+```json
+[
+  {
+    "id": 1,
+    "timestamp": "2024-01-01 12:00:00",
+    "protocol": "TCP",
+    "src_ip": "192.168.1.10",
+    "dst_ip": "192.168.1.20",
+    "src_port": "5000",
+    "dst_port": "9999",
+    "tcp_flags": "SYN",
+    "length": 64,
+    "payload": "...",
+    "summary": "TCP [SYN] 192.168.1.10:5000 → 192.168.1.20:9999"
+  }
+]
+```
+
+## 跨主机通信排查
+
+如果发送端无法访问接收端，按以下步骤逐一排查：
+
+### 1. 确认 Flask 监听地址
+
+```bash
+docker logs netsec-receiver 2>&1 | grep "Running on"
+# 必须显示: Running on http://0.0.0.0:5000
+# 如果显示 127.0.0.1:5000，说明 FLASK_HOST 未正确设置
+```
+
+### 2. 确认防火墙规则
+
+```bash
+# CentOS 7 / firewalld
+sudo firewall-cmd --list-ports
+sudo firewall-cmd --add-port=5000/tcp --permanent
+sudo firewall-cmd --add-port=9999/tcp --permanent
+sudo firewall-cmd --reload
+
+# 或使用 iptables
+sudo iptables -L -n | grep -E "5000|9999"
+
+# 临时关闭防火墙（仅测试用）
+sudo systemctl stop firewalld
+```
+
+### 3. 确认网络互通
+
+```bash
+# 测试基础连通性
+ping <对方IP>
+
+# 测试端口连通性
+curl -v http://<对方IP>:5000/
+# 或
+telnet <对方IP> 5000
+```
+
+### 4. 确认 SELinux
+
+```bash
+# 查看状态
+getenforce
+
+# 临时关闭（需 root）
+sudo setenforce 0
+
+# 永久关闭
+sudo sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+```
+
+### 5. 确认 Docker 网络模式
+
+```bash
+# 必须使用 --network host 模式
+docker inspect netsec-receiver | grep NetworkMode
+# 应显示: "host"
+```
+
+### 6. 确认端口占用
+
+```bash
+# 检查 5000 和 9999 端口是否被占用
+ss -tlnp | grep -E "5000|9999"
+netstat -tlnp | grep -E "5000|9999"
+```
 
 ## 使用说明
 
