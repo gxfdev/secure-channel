@@ -9,6 +9,8 @@ Flask Web 应用 - 网络安全传输演示系统
   LISTEN_PORT: 监听端口（默认 9999）
   RSA_BITS: RSA密钥位数（默认 512）
   DATA_DIR: 数据包存储目录（默认 ./captured_data）
+  FLASK_HOST: Flask监听地址（默认 0.0.0.0）
+  FLASK_PORT: Flask监听端口（默认 5000）
 """
 import os
 import sys
@@ -39,6 +41,8 @@ RECEIVER_PORT = int(os.environ.get('RECEIVER_PORT', '9999') or '9999')
 LISTEN_PORT = int(os.environ.get('LISTEN_PORT', '9999') or '9999')
 RSA_BITS = int(os.environ.get('RSA_BITS', '512') or '512')
 DATA_DIR = os.environ.get('DATA_DIR', './captured_data') or './captured_data'
+FLASK_HOST = os.environ.get('FLASK_HOST', '0.0.0.0') or '0.0.0.0'
+FLASK_PORT = int(os.environ.get('FLASK_PORT', '5000') or '5000')
 
 # 创建数据存储目录
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -681,5 +685,5 @@ if __name__ == '__main__':
     print(f"\n启动协商服务器（端口 {LISTEN_PORT}）...")
     start_negotiate_server()
 
-    print(f"\nWeb 界面: http://0.0.0.0:5000\n")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    print(f"\nWeb 界面: http://{FLASK_HOST}:{FLASK_PORT}\n")
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False)

@@ -27,6 +27,8 @@ ENV RECEIVER_PORT=9999
 ENV LISTEN_PORT=9999
 ENV RSA_BITS=512
 ENV DATA_DIR=/app/captured_data
+ENV FLASK_HOST=0.0.0.0
+ENV FLASK_PORT=5000
 
 # 创建数据存储目录
 RUN mkdir -p /app/captured_data

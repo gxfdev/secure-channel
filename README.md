@@ -44,28 +44,51 @@
 
 ## 快速开始
 
+### 前提条件
+
+- 两台互通的主机（虚拟机或物理机）
+- 防火墙开放 5000/tcp（Web界面）和 9999/tcp（数据传输）
+- Docker 已安装
+
 ### 方式一：Docker 部署（推荐）
+
+> **重要**: 必须使用 `--network host` 模式运行容器，否则跨主机通信和抓包功能不可用。
+> Flask 默认监听 `0.0.0.0:5000`，确保外部主机可访问。
 
 ```bash
 # 拉取镜像
 docker pull ghcr.io/gxfdev/secure-channel:main
 
-# 接收端 VM
+# ========== 接收端 VM ==========
 docker run -d --name netsec-receiver \
   --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
   -v /home/user/captured_data:/app/captured_data \
   -e MODE=receiver \
+  -e FLASK_HOST=0.0.0.0 \
   ghcr.io/gxfdev/secure-channel:main
 
-# 发送端 VM（将 <接收端IP> 替换为接收端 VM 的实际 IP 地址）
+# ========== 发送端 VM ==========
+# 将 <接收端IP> 替换为接收端 VM 的实际 IP 地址
 docker run -d --name netsec-sender \
   --network host \
   --cap-add NET_ADMIN --cap-add NET_RAW \
   -v /home/user/captured_data:/app/captured_data \
   -e MODE=sender \
   -e RECEIVER_HOST=<接收端IP> \
+  -e FLASK_HOST=0.0.0.0 \
   ghcr.io/gxfdev/secure-channel:main
+```
+
+**验证部署**:
+```bash
+# 在接收端 VM 上检查 Flask 是否监听 0.0.0.0
+docker logs netsec-receiver 2>&1 | grep "Running on"
+# 应看到: Running on http://0.0.0.0:5000
+
+# 在发送端 VM 上测试访问接收端
+curl http://<接收端IP>:5000/
+# 应返回 HTML 内容
 ```
 
 ### 方式二：Docker Compose
@@ -85,11 +108,21 @@ RECEIVER_HOST=<接收端IP> docker compose up -d
 pip install -r requirements.txt
 
 # 接收端
-MODE=receiver python app.py
+MODE=receiver FLASK_HOST=0.0.0.0 python app.py
 
 # 发送端（将 <接收端IP> 替换为接收端的实际 IP）
-MODE=sender RECEIVER_HOST=<接收端IP> python app.py
+MODE=sender RECEIVER_HOST=<接收端IP> FLASK_HOST=0.0.0.0 python app.py
 ```
+
+### 跨主机通信排查
+
+如果发送端无法访问接收端 Web 界面，按以下步骤排查：
+
+1. **确认 Flask 监听地址**: `docker logs <容器名> | grep "Running on"`，必须显示 `0.0.0.0:5000`
+2. **确认防火墙**: `firewall-cmd --list-ports` 或 `iptables -L -n`，确保 5000/tcp 和 9999/tcp 开放
+3. **确认网络互通**: `ping <对方IP>` 测试基础连通性
+4. **确认 SELinux**: 临时关闭 `setenforce 0`，或永久配置
+5. **确认 Docker 网络模式**: 必须使用 `--network host`
 
 ## 使用说明
 
@@ -110,6 +143,8 @@ MODE=sender RECEIVER_HOST=<接收端IP> python app.py
 | `LISTEN_PORT` | `9999` | 本端监听端口 |
 | `RSA_BITS` | `512` | RSA 密钥位数 |
 | `DATA_DIR` | `./captured_data` | 数据存储目录 |
+| `FLASK_HOST` | `0.0.0.0` | Flask 监听地址，跨主机必须设为 `0.0.0.0` |
+| `FLASK_PORT` | `5000` | Flask 监听端口 |
 
 ## 项目结构
 
