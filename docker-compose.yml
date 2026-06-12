@@ -1,9 +1,14 @@
 version: '3.8'
 
+# 镜像配置 - 从阿里云ACR拉取
+# 如需本地构建，将 image 替换为 build: .
+x-image: &default-image
+  image: ${DOCKER_IMAGE:-registry.cn-hangzhou.aliyuncs.com/gxfdev/grcs:latest}
+
 services:
   # ==================== 发送端 ====================
   sender:
-    build: .
+    <<: *default-image
     container_name: netsec-sender
     environment:
       - MODE=sender
@@ -24,13 +29,13 @@ services:
 
   # ==================== 接收端 ====================
   receiver:
-    build: .
+    <<: *default-image
     container_name: netsec-receiver
     environment:
       - MODE=receiver
       - LISTEN_PORT=9999
       - FLASK_HOST=0.0.0.0
-      - FLASK_PORT=5001        # 接收端 Web 界面用 5001，避免与发送端 5000 冲突
+      - FLASK_PORT=5001
       - RSA_BITS=512
       - DATA_DIR=/app/captured_data
     network_mode: host

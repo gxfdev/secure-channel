@@ -1,4 +1,4 @@
-name: Docker 镜像构建与推送
+name: 构建并推送镜像到阿里云ACR
 
 on:
   push:
@@ -6,39 +6,39 @@ on:
     tags: [ 'v*' ]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: grcs
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 登录 GitHub Container Registry
+      - name: 登录阿里云ACR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
 
       - name: 提取 Docker 元数据
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}
           tags: |
+            # main/master 分支 → :main 标签
             type=ref,event=branch
+            # v1.0.0 标签 → :1.0.0 和 :1.0 标签
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha
+            # 始终打 :latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 短 SHA
+            type=sha,prefix=
 
-      - name: 构建并推送 Docker 镜像
+      - name: 构建并推送镜像
         uses: docker/build-push-action@v5
         with:
           context: .
