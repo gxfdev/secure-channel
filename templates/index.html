@@ -256,6 +256,86 @@ function renderData(data) {
     return html;
 }
 
+// 渲染新的 5 步密钥交换详情（支持嵌套对象、数组、元组）
+function renderDetail(detail) {
+    if (!detail) return '';
+    var html = '';
+    for (var k in detail) {
+        var v = detail[k];
+        // 嵌套对象 → 递归渲染为子区块
+        if (typeof v === 'object' && !Array.isArray(v) && v !== null) {
+            html += '<div style="margin:6px 0 6px 12px;border-left:2px solid #3b82f6;padding-left:10px">';
+            html += '<div style="color:#60a5fa;font-weight:600;font-size:12px;margin-bottom:4px">'+esc(k)+'</div>';
+            html += renderDetail(v);
+            html += '</div>';
+        }
+        // 数组 → 特殊处理：元组数组 vs 普通字符串数组
+        else if (Array.isArray(v)) {
+            html += '<div class="data-row"><span class="data-key" style="color:#f59e0b">'+esc(k)+'</span><span class="data-val">';
+            for (var i=0; i<v.length; i++) {
+                if (typeof v[i] === 'object' && Array.isArray(v[i]) && v[i].length >= 2) {
+                    // 元组格式 [label, value, desc?]
+                    html += '<div style="padding:3px 0;border-bottom:1px solid #1e293b">';
+                    html += '<span style="color:#4ade80;font-weight:600">'+esc(String(v[i][0]))+'</span>';
+                    if (v[i][1]) html += ' <span style="color:#94a3b8">'+esc(String(v[i][1]))+'</span>';
+                    if (v[i][2]) html += ' <span style="color:#64748b;font-size:11px">('+esc(String(v[i][2]))+')</span>';
+                    html += '</div>';
+                } else if (typeof v[i] === 'string') {
+                    html += '<div>'+esc(v[i])+'</div>';
+                } else {
+                    html += '<div>'+esc(String(v[i]))+'</div>';
+                }
+            }
+            html += '</span></div>';
+        } else {
+            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val">'+esc(String(v))+'</span></div>';
+        }
+    }
+    return html;
+}
+
+function renderConnect(r) {
+    var html = '';
+    (r.steps||[]).forEach(function(step) {
+        // 步骤状态颜色
+        var statusIcon = step.status==='success'?'&#10004;':step.status==='error'?'&#10008;':'&#8987;';
+        var statusColor = step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6';
+        var statusText = step.status==='success'?'通过':step.status==='error'?'失败':'进行中';
+        var borderClr = step.status==='success'?'#065f46':step.status==='error'?'#7f1d1d':'#1e40af';
+
+        html += '<div class="step-card" style="border-color:'+borderClr+'">';
+        html += '<div class="flex items-center gap2 mb2">';
+        html += '<span class="step-num" style="background:'+statusColor+'">'+step.id+'</span>';
+        html += '<span class="font-bold text-sm">'+esc(step.title)+'</span>';
+        html += '<span style="color:'+statusColor+';font-weight:700;font-size:13px;margin-left:auto">'+statusIcon+' '+statusText+'</span>';
+        html += '</div>';
+        html += '<div class="text-xs text-slate400 mb2">'+esc(step.description||'')+'</div>';
+
+        // 使用 renderDetail 渲染嵌套详情
+        if (step.detail) {
+            html += renderDetail(step.detail);
+        } else if (step.data) {
+            html += renderData(step.data);
+        }
+
+        // 步骤1 显示握手动画
+        if (step.id===1 && step.detail && step.detail['过程']) { show('handshakePanel'); renderHandshakeViz(step.detail['过程']); }
+        html += '</div>';
+    });
+    document.getElementById('connectResult').innerHTML = html;
+}
+
+function renderHandshakeViz(steps) {
+    var html = '<div style="display:flex;flex-direction:column;gap:8px">';
+    steps.forEach(function(s) {
+        var tc = s[0].indexOf('SYN')!==-1&&s[0].indexOf('ACK')===-1?'tag-blue':s[0].indexOf('SYN')!==-1?'tag-green':'tag-yellow';
+        var arrow = s[0].indexOf('→')!==-1?'&#10145;':'&#11013;';
+        html += '<div class="flex items-center gap2 text-sm"><span style="font-size:18px">'+arrow+'</span><span class="tag '+tc+'">'+esc(s[0])+'</span><span class="text-xs text-slate400">'+esc(s[1])+'</span><span class="text-xs text-slate500">('+esc(s[2])+')</span></div>';
+    });
+    html += '</div>';
+    document.getElementById('handshakeViz').innerHTML = html;
+}
+
 async function loadInfo() {
     try {
         var resp = await fetch('/api/info');
@@ -288,7 +368,7 @@ async function loadInfo() {
 
 function updateConnUI(c) {
     if (!c) return;
-    var map = {disconnected:{cls:'st-disconn',lbl:'未连接'},connecting:{cls:'st-connecting',lbl:'连接中...'},negotiating:{cls:'st-negot',lbl:'密钥协商中...'},connected:{cls:'st-conn',lbl:'已连接'}};
+    var map = {disconnected:{cls:'st-disconn',lbl:'未连接'},connecting:{cls:'st-connecting',lbl:'连接中...'},exchanging_rsa_keys:{cls:'st-negot',lbl:'交换RSA公钥中...'},exchanging_dh_keys:{cls:'st-negot',lbl:'交换DH公钥中...'},verifying_signatures:{cls:'st-negot',lbl:'验证签名中...'},negotiating:{cls:'st-negot',lbl:'密钥协商中...'},connected:{cls:'st-conn',lbl:'已连接'}};
     var s = map[c.status]||map.disconnected;
     document.getElementById('connDot').className = 'status-dot '+s.cls;
     document.getElementById('connText').textContent = s.lbl;
@@ -329,22 +409,6 @@ function renderConnect(r) {
         if (step.id===2) { show('dhPanel'); renderDH(step); }
     });
     document.getElementById('connectResult').innerHTML = html;
-}
-
-function renderHandshake(steps) {
-    var html = '<div style="display:flex;flex-direction:column;gap:8px">';
-    steps.forEach(function(s) {
-        var tc = s.flag==='SYN'?'tag-blue':s.flag==='SYN+ACK'?'tag-green':'tag-yellow';
-        var arrow = s.dir==='→'?'&#10145;':'&#11013;';
-        html += '<div class="flex items-center gap2 text-sm"><span style="font-size:18px">'+arrow+'</span><span class="tag '+tc+'">'+esc(s.flag)+'</span><span class="text-xs text-slate400">'+esc(s.from)+' &#8594; '+esc(s.to)+'</span><span class="text-xs text-slate500">'+esc(s.desc)+'</span></div>';
-    });
-    html += '</div>';
-    document.getElementById('handshakeViz').innerHTML = html;
-}
-
-function renderDH(step) {
-    var html = '<div class="text-xs" style="display:flex;flex-direction:column;gap:8px"><div class="flex items-center gap2"><span style="font-size:18px">&#10145;</span><span class="tag tag-blue">发送</span><span class="text-slate400">本方 DH 公钥 + RSA 私钥签名</span></div><div class="flex items-center gap2"><span style="font-size:18px">&#11013;</span><span class="tag tag-green">接收</span><span class="text-slate400">对方 DH 公钥 + RSA 私钥签名</span></div><div class="flex items-center gap2"><span style="font-size:18px">&#10145;</span><span class="tag tag-yellow">验证</span><span class="text-slate400">用对方 RSA 公钥验证签名</span></div>'+renderData(step.data)+'</div>';
-    document.getElementById('dhViz').innerHTML = html;
 }
 
 async function doCapture() {

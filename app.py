@@ -195,12 +195,16 @@ def test_tcp():
 @app.route('/api/connect', methods=['POST'])
 def api_connect():
     """
-    发送端: 建立与接收端的 TCP 连接 + DH 密钥协商
-    流程:
-    1. TCP 三次握手
-    2. 交换 DH 公钥（带 RSA 签名）
-    3. 验证对方签名
-    4. 计算共享会话密钥
+    发送端: 建立与接收端的 TCP 连接 + 完整的密钥交换流程（5步）
+
+    流程设计:
+    ┌─────────────────────────────────────────────────────────────┐
+    │  步骤1: TCP 三次握手 → 建立可靠连接                         │
+    │  步骤2: 交换 RSA 公钥 → 我发我的公钥给你，你发你的公钥给我   │
+    │  步骤3: 交换 DH 公钥(带RSA签名) → 签名保证DH公钥真实性       │
+    │  步骤4: 验证对方签名 → 用对方RSA公钥验证对方DH公钥签名        │
+    │  步骤5: 计算共享会话密钥 → 双方独立算出相同的AES+HMAC密钥     │
+    └─────────────────────────────────────────────────────────────┘
     """
     global _dh_peer, _connection_state
 
@@ -217,14 +221,15 @@ def api_connect():
 
         result = {'steps': [], 'success': False}
 
-        # ===== 步骤1: TCP 三次握手 =====
+        # ================================================================
+        # 步骤 1: TCP 三次握手
+        # ================================================================
         local_ip = socket.gethostbyname(socket.gethostname())
         local_port = random.randint(40000, 60000)
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(10)
 
-        # 记录握手过程
         handshake_info = [
             {'step': 1, 'dir': '→', 'from': f'{local_ip}:{local_port}', 'to': f'{target_host}:{target_port}',
              'flag': 'SYN', 'desc': '发送 SYN 包，请求建立连接'},
@@ -236,110 +241,242 @@ def api_connect():
         _connection_state['tcp_handshake'] = handshake_info
 
         result['steps'].append({
-            'id': 1, 'title': 'TCP 三次握手',
+            'id': 1,
+            'title': '步骤1: TCP 三次握手',
+            'status': 'success',
             'description': '与接收端建立可靠的 TCP 连接',
-            'data': {
+            'detail': {
                 '本地地址': f'{local_ip}:{local_port}',
                 '目标地址': f'{target_host}:{target_port}',
-                '握手过程': handshake_info
+                '过程': [
+                    ('→ SYN', f'从 {local_ip}:{local_port} 发送到 {target_host}:{target_port}', '请求建立连接'),
+                    ('← SYN+ACK', f'从 {target_host}:{target_port} 返回到 {local_ip}:{local_port}', '对方确认'),
+                    ('→ ACK', f'从 {local_ip}:{local_port} 发送到 {target_host}:{target_port}', '握手完成'),
+                ]
             }
         })
 
-        # 实际建立 TCP 连接
         try:
             sock.connect((target_host, target_port))
         except socket.timeout:
+            result['steps'][0]['status'] = 'error'
             _connection_state['status'] = 'disconnected'
             return jsonify({'success': False, 'error': f'TCP连接超时: 无法连接到 {target_host}:{target_port}，请检查：1)目标主机是否可达 2)目标端口{target_port}是否开放 3)防火墙是否放行 4)接收端协商服务器是否启动', 'steps': result['steps']})
         except ConnectionRefusedError:
+            result['steps'][0]['status'] = 'error'
             _connection_state['status'] = 'disconnected'
             return jsonify({'success': False, 'error': f'连接被拒绝: {target_host}:{target_port}，目标端口未监听或服务未启动。请确认接收端容器已运行且协商服务器在端口{target_port}上监听', 'steps': result['steps']})
         except Exception as e:
+            result['steps'][0]['status'] = 'error'
             _connection_state['status'] = 'disconnected'
             return jsonify({'success': False, 'error': f'TCP连接失败: {e}', 'steps': result['steps']})
 
-        # ===== 步骤2: 请求对方公钥 =====
-        _connection_state['status'] = 'negotiating'
+        print(f"\n{'='*60}")
+        print(f"  [步骤1] TCP 三次握手完成: {local_ip}:{local_port} → {target_host}:{target_port}")
+        print(f"{'='*60}\n")
 
-        # 发送协商请求（包含本方监听端口，用于双向通信）
-        negotiate_req = json.dumps({
-            'type': 'negotiate_request',
+        # ================================================================
+        # 步骤 2: 交换 RSA 公钥
+        #   发送端发送自己的 RSA 公钥给接收端
+        #   接收端返回自己的 RSA 公钥给发送端
+        # ================================================================
+        _connection_state['status'] = 'exchanging_rsa_keys'
+
+        my_rsa_pub = get_rsa_keys()[0]  # (e, n)
+
+        # 发送本方 RSA 公钥
+        step2_send = json.dumps({
+            'type': 'step2_rsa_pub_exchange',
+            'rsa_e': my_rsa_pub[0],
+            'rsa_n': my_rsa_pub[1],
             'listen_port': LISTEN_PORT
         }).encode()
-        sock.sendall(struct.pack('>I', len(negotiate_req)) + negotiate_req)
+        sock.sendall(struct.pack('>I', len(step2_send)) + step2_send)
 
-        # 接收对方响应（公钥 + DH公钥 + 签名）
+        # 接收对方 RSA 公钥
         resp_len = struct.unpack('>I', _recv_exact(sock, 4))[0]
         resp_data = _recv_exact(sock, resp_len)
-        peer_info = json.loads(resp_data.decode())
+        peer_step2 = json.loads(resp_data.decode())
 
-        peer_rsa_e = peer_info['rsa_e']
-        peer_rsa_n = peer_info['rsa_n']
-        peer_dh_public = int(peer_info['dh_public'], 16)
-        peer_dh_signature = bytes.fromhex(peer_info['dh_signature'])
+        peer_rsa_e = peer_step2['rsa_e']
+        peer_rsa_n = peer_step2['rsa_n']
         peer_rsa_pub = (peer_rsa_e, peer_rsa_n)
+        peer_listen_port = peer_step2.get('listen_port', LISTEN_PORT)
 
-        # 保存对方的监听端口（用于反向发送数据）
-        peer_listen_port = peer_info.get('listen_port', LISTEN_PORT)
         _connection_state['peer_listen_port'] = peer_listen_port
         _connection_state['peer_public_key'] = {'e': peer_rsa_e, 'n_bits': peer_rsa_n.bit_length()}
         _connection_state['peer_public_key_raw'] = peer_rsa_pub
 
-        # ===== 步骤3: 生成 DH 密钥对 =====
-        _dh_peer = DHPeer(bits=256)
-        my_dh_public = _dh_peer.get_public_key()
-
-        # 用本方私钥对 DH 公钥签名（不可否认性）
-        my_dh_public_bytes = my_dh_public.to_bytes((my_dh_public.bit_length() + 7) // 8, 'big')
-        my_signature = rsa_sign(my_dh_public_bytes, get_rsa_keys()[1])
-
-        # 发送本方信息（包含监听端口，用于双向通信）
-        my_info = json.dumps({
-            'type': 'negotiate_response',
-            'rsa_e': get_rsa_keys()[0][0],
-            'rsa_n': get_rsa_keys()[0][1],
-            'dh_public': hex(my_dh_public),
-            'dh_signature': my_signature.hex(),
-            'listen_port': LISTEN_PORT
-        }).encode()
-        sock.sendall(struct.pack('>I', len(my_info)) + my_info)
-
-        # ===== 步骤4: 验证对方签名 =====
-        peer_dh_public_bytes = peer_dh_public.to_bytes((peer_dh_public.bit_length() + 7) // 8, 'big')
-
-        # 调试信息：记录签名验证详情
-        from sha256 import sha256 as _sha256_dbg
-        actual_hash_dbg = int.from_bytes(_sha256_dbg(peer_dh_public_bytes), 'big')
-        recovered_hash_dbg = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
-        print(f"  [发送端] 签名验证: actual_hash={actual_hash_dbg}, recovered_hash={recovered_hash_dbg}, match={actual_hash_dbg==recovered_hash_dbg}")
-        print(f"  [发送端] 对方RSA: e={peer_rsa_e}, n_bits={peer_rsa_n.bit_length()}")
-        print(f"  [发送端] 对方DH公钥字节长度: {len(peer_dh_public_bytes)}")
-
-        peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
-
-        _connection_state['peer_verified'] = peer_verified
-
         result['steps'].append({
-            'id': 2, 'title': 'DH 密钥协商 + 数字签名',
-            'description': '交换 DH 公钥，用 RSA 私钥签名保证真实性，验证对方签名',
-            'data': {
-                '本方DH公钥': hex(my_dh_public)[:40] + '...',
-                '对方DH公钥': hex(peer_dh_public)[:40] + '...',
-                '本方签名(私钥签名)': my_signature.hex()[:40] + '...',
-                '对方签名验证': '通过 ✓' if peer_verified else '失败 ✗',
-                '对方RSA公钥e': peer_rsa_e,
-                '对方RSA位数': f'{peer_rsa_n.bit_length()} 位',
-                '签名算法': 'RSA-SHA256 (先SHA256哈希，再RSA私钥签名)',
-                '安全性': '私钥签名保证不可否认性和真实性'
+            'id': 2,
+            'title': '步骤2: 交换 RSA 公钥',
+            'status': 'success',
+            'description': '双方互相发送各自的 RSA 公钥，为后续签名验证做准备',
+            'detail': {
+                '我发送的RSA公钥': {
+                    'e (指数)': str(my_rsa_pub[0]),
+                    'n (模数)': str(my_rsa_pub[1])[:64] + f"... ({my_rsa_pub[1].bit_length()}位)",
+                    '说明': '用此公钥可以验证我对DH公钥的签名'
+                },
+                '收到的对方RSA公钥': {
+                    'e (指数)': str(peer_rsa_e),
+                    'n (模数)': str(peer_rsa_n)[:64] + f"... ({peer_rsa_n.bit_length()}位)",
+                    '说明': '用此公钥验证对方的DH公钥签名'
+                },
+                '交换方向': '我 → 对方：我的RSA公钥 | 对方 → 我：对方的RSA公钥',
+                '用途': '后续步骤中，双方用收到的对方RSA公钥来验证对方DH公钥的数字签名'
             }
         })
 
+        print(f"{'='*60}")
+        print(f"  [步骤2] RSA 公钥交换完成")
+        print(f"    我的RSA公钥: e={my_rsa_pub[0]}, n={str(my_rsa_pub[1])[:32]}...({my_rsa_pub[1].bit_length()}位)")
+        print(f"    对方RSA公钥: e={peer_rsa_e}, n={str(peer_rsa_n)[:32]}...({peer_rsa_n.bit_length()}位)")
+        print(f"{'='*60}\n")
+
+        # ================================================================
+        # 步骤 3: 交换 DH 公钥（带 RSA 数字签名）
+        #   双方各自生成 DH 密钥对
+        #   用各自的 RSA 私钥对 DH 公钥签名（不可否认性 + 真实性）
+        #   互相发送签名的 DH 公钥
+        # ================================================================
+        _connection_state['status'] = 'exchanging_dh_keys'
+
+        # 生成 DH 密钥对
+        _dh_peer = DHPeer(bits=256)
+        my_dh_public = _dh_peer.get_public_key()
+        my_dh_private = _dh_peer.private_key  # 保存私钥引用用于后续计算
+
+        # 用本方 RSA 私钥对 DH 公钥签名
+        my_dh_public_bytes = my_dh_public.to_bytes((my_dh_public.bit_length() + 7) // 8, 'big')
+        my_signature = rsa_sign(my_dh_public_bytes, get_rsa_keys()[1])
+
+        # 发送签名后的 DH 公钥
+        step3_send = json.dumps({
+            'type': 'step3_dh_key_exchange',
+            'dh_public': hex(my_dh_public),
+            'dh_signature': my_signature.hex()
+        }).encode()
+        sock.sendall(struct.pack('>I', len(step3_send)) + step3_send)
+
+        # 接收对方签名的 DH 公钥
+        resp_len = struct.unpack('>I', _recv_exact(sock, 4))[0]
+        resp_data = _recv_exact(sock, resp_len)
+        peer_step3 = json.loads(resp_data.decode())
+
+        peer_dh_public = int(peer_step3['dh_public'], 16)
+        peer_dh_signature = bytes.fromhex(peer_step3['dh_signature'])
+
+        result['steps'].append({
+            'id': 3,
+            'title': '步骤3: 交换 DH 公钥（带 RSA 数字签名）',
+            'status': 'success',
+            'description': '双方生成 DH 密钥对，用各自的 RSA 私钥对 DH 公钥签名后发送',
+            'detail': {
+                '我生成的DH密钥对': {
+                    'DH私钥(保密)': hex(_dh_peer.private_key)[:40] + '...',
+                    'DH公钥(将发送)': hex(my_dh_public),
+                    '说明': 'DH私钥绝不外泄，只有我知道'
+                },
+                '我对DH公钥的RSA签名': {
+                    '原始数据': f'DH公钥字节({len(my_dh_public_bytes)}字节)',
+                    '签名值': my_signature.hex()[:64] + '...',
+                    '签名算法': 'SHA256(DH公钥) → RSA私钥加密哈希值',
+                    '作用': '证明这个DH公钥确实来自我（不可否认性）'
+                },
+                '收到的对方DH公钥+签名': {
+                    '对方DH公钥': hex(peer_dh_public),
+                    '对方DH公钥签名': peer_dh_signature.hex()[:64] + '...',
+                    '说明': '下一步将用对方RSA公钥验证此签名'
+                },
+                '交换方向': '我 → 对方：我的DH公钥+我的RSA签名 | 对方 → 我：对方的DH公钥+对方的RSA签名'
+            }
+        })
+
+        print(f"{'='*60}")
+        print(f"  [步骤3] DH 公钥交换完成")
+        print(f"    我的DH公钥: {hex(my_dh_public)}")
+        print(f"    我的签名:   {my_signature.hex()[:48]}...")
+        print(f"    对方DH公钥: {hex(peer_dh_public)}")
+        print(f"    对方签名:   {peer_dh_signature.hex()[:48]}...")
+        print(f"{'='*60}\n")
+
+        # ================================================================
+        # 步骤 4: 验证对方签名
+        #   用步骤2中收到的对方 RSA 公钥，验证步骤3中对方 DH 公钥的签名
+        #   如果验证通过 → 对方的 DH 公钥是真实的（未被篡改）
+        #   如果验证失败 → 可能遭受中间人攻击！
+        # ================================================================
+        _connection_state['status'] = 'verifying_signatures'
+
+        peer_dh_public_bytes = peer_dh_public.to_bytes((peer_dh_public.bit_length() + 7) // 8, 'big')
+
+        # 详细调试信息
+        from sha256 import sha256 as _sha256_dbg
+        actual_hash_dbg = int.from_bytes(_sha256_dbg(peer_dh_public_bytes), 'big')
+        recovered_hash_dbg = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
+        sig_match = (actual_hash_dbg == recovered_hash_dbg)
+
+        print(f"{'='*60}")
+        print(f"  [步骤4] 验证对方签名...")
+        print(f"    对方DH公钥的SHA256哈希: {hex(actual_hash_dbg)}")
+        print(f"    从签名恢复的哈希值:     {hex(recovered_hash_dbg)}")
+        print(f"    匹配结果: {'✓ 通过' if sig_match else '✗ 失败'}")
+        print(f"{'='*60}\n")
+
+        peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
+        _connection_state['peer_verified'] = peer_verified
+
         if not peer_verified:
+            result['steps'].append({
+                'id': 4,
+                'title': '步骤4: 验证对方签名',
+                'status': 'error',
+                'description': '用对方 RSA 公钥验证对方 DH 公钥的数字签名 — 失败！',
+                'detail': {
+                    '验证结果': '失败 ✗',
+                    '错误原因': '对方DH公钥的签名无法用其RSA公钥验证通过',
+                    '可能原因': [
+                        '中间人攻击：有人篡改了DH公钥或签名',
+                        '传输过程中数据损坏',
+                        '对方使用了错误的RSA密钥对'
+                    ],
+                    '安全警告': '继续使用可能导致会话密钥泄露！连接已终止。'
+                }
+            })
             sock.close()
             _connection_state['status'] = 'disconnected'
             return jsonify({'success': False, 'error': '对方签名验证失败！可能遭受中间人攻击', 'steps': result['steps']})
 
-        # ===== 步骤5: 计算共享会话密钥 =====
+        result['steps'].append({
+            'id': 4,
+            'title': '步骤4: 验证对方签名',
+            'status': 'success',
+            'description': '用步骤2收到的对方 RSA 公钥，验证步骤3对方 DH 公钥的签名',
+            'detail': {
+                '验证对象': '对方发送的 DH 公钥 + 对方的 RSA 数字签名',
+                '验证方法': [
+                    '① 计算 SHA256(对方DH公钥) → 得到哈希值 H',
+                    '② 用对方RSA公钥解密签名 → 得到 H\'',
+                    '③ 比较 H == H\' ?'
+                ],
+                '验证结果': '通过 ✓',
+                '实际哈希值(H)': hex(actual_hash_dbg),
+                '从签名恢复的哈希值(H\')': hex(recovered_hash_dbg),
+                '含义': '对方的 DH 公钥确实是用对方的 RSA 私钥签名的，真实可信',
+                '安全性': '即使有人截获并篡改了 DH 公钥，没有私钥也无法伪造有效签名'
+            }
+        })
+
+        print(f"  [步骤4] 签名验证通过 ✓\n")
+
+        # ================================================================
+        # 步骤 5: 计算共享会话密钥
+        #   发送端: shared_secret = 对方DH公钥 ^ 我的DH私钥 mod p
+        #   接收端: shared_secret = 我的DH公钥 ^ 对方DH私钥 mod p
+        #   数学保证: 双方得到相同的 shared_secret !
+        #   然后用 SHA-256 派生 AES 会话密钥 和 HMAC 密钥
+        # ================================================================
         _dh_peer.compute_shared_secret(peer_dh_public)
         session_key = _dh_peer.get_session_key()
         hmac_key = _dh_peer.get_hmac_key()
@@ -348,22 +485,41 @@ def api_connect():
         _connection_state['hmac_key'] = hmac_key.hex()
         _connection_state['status'] = 'connected'
 
-        # 保存连接会话
-        sock.close()  # 协商完成，关闭协商连接，后续数据传输用新连接
+        sock.close()  # 协商完成，关闭协商连接
 
         result['steps'].append({
-            'id': 3, 'title': '协商完成 - 会话密钥生成',
-            'description': '双方独立计算出相同的共享密钥，派生 AES 会话密钥和 HMAC 密钥',
-            'data': {
-                '共享密钥协商': 'DH: g^(ab) mod p',
-                'AES会话密钥': session_key.hex(),
-                'HMAC密钥': hmac_key.hex(),
-                '密钥派生': 'SHA-256(共享密钥) → 前16字节=AES密钥, 后16字节=HMAC密钥',
-                'DH素数群': 'RFC 3526 2048-bit MODP Group'
+            'id': 5,
+            'title': '步骤5: 计算共享会话密钥',
+            'status': 'success',
+            'description': '双方利用 DH 算法独立计算出相同的共享密钥，派生 AES 加密密钥和 HMAC 认证密钥',
+            'detail': {
+                'DH共享秘密计算': {
+                    '公式': 'shared_secret = 对方DH公钥 ^ 本方DH私钥 mod p',
+                    '数学原理': '(g^b)^a mod p = (g^a)^b mod p = g^(ab) mod p',
+                    '安全性': '即使窃听到双方的 DH 公钥，没有私钥也无法计算出共享秘密（离散对数难题）'
+                },
+                '密钥派生(SHA-256)': {
+                    '输入': f'DH共享秘密({_dh_peer.shared_secret.bit_length()}位)',
+                    '输出(32字节)': '前16字节 = AES-128-CBC密钥 | 后16字节 = HMAC-SHA256密钥',
+                    'AES会话密钥': session_key.hex(),
+                    'HMAC认证密钥': hmac_key.hex()
+                },
+                '最终结果': {
+                    '状态': '连接已建立 ✓',
+                    '可用操作': ['抓取数据包', '加密并发送数据(AES+HMAC+RSA签名)', '接收端自动解密验证']
+                }
             }
         })
 
         result['success'] = True
+
+        print(f"{'='*60}")
+        print(f"  [步骤5] 会话密钥生成完成 ✓")
+        print(f"    AES会话密钥: {session_key.hex()}")
+        print(f"    HMAC密钥:    {hmac_key.hex()}")
+        print(f"{'='*60}")
+        print(f"\n  ★ 连接建立成功！可以进行加密通信了\n")
+
         return jsonify(result)
 
     except Exception as e:
@@ -426,8 +582,49 @@ def start_negotiate_server():
                     _connection_state['status'] = _connection_state.get('status', 'disconnected')
                     continue
 
-                elif req.get('type') == 'negotiate_request':
-                    # 生成 DH 密钥对
+                elif req.get('type') == 'step2_rsa_pub_exchange':
+                    # ========== 步骤2: 接收端处理 RSA 公钥交换 ==========
+                    # 收到对方的 RSA 公钥，保存并返回自己的 RSA 公钥
+                    peer_rsa_e = req['rsa_e']
+                    peer_rsa_n = req['rsa_n']
+                    peer_listen_port = req.get('listen_port', LISTEN_PORT)
+                    peer_rsa_pub = (peer_rsa_e, peer_rsa_n)
+
+                    _connection_state['peer_public_key'] = {'e': peer_rsa_e, 'n_bits': peer_rsa_n.bit_length()}
+                    _connection_state['peer_public_key_raw'] = peer_rsa_pub
+                    _connection_state['peer_listen_port'] = peer_listen_port
+
+                    my_rsa_pub = get_rsa_keys()[0]
+
+                    print(f"\n{'='*60}")
+                    print(f"  [接收端-步骤2] 收到对方RSA公钥")
+                    print(f"    对方RSA: e={peer_rsa_e}, n={str(peer_rsa_n)[:32]}...({peer_rsa_n.bit_length()}位)")
+                    print(f"    返回我的RSA公钥: e={my_rsa_pub[0]}, n={str(my_rsa_pub[1])[:32]}...({my_rsa_pub[1].bit_length()}位)")
+                    print(f"{'='*60}\n")
+
+                    # 返回自己的 RSA 公钥
+                    step2_resp = json.dumps({
+                        'type': 'step2_rsa_pub_exchange',
+                        'rsa_e': my_rsa_pub[0],
+                        'rsa_n': my_rsa_pub[1],
+                        'listen_port': LISTEN_PORT
+                    }).encode()
+                    conn.sendall(struct.pack('>I', len(step2_resp)) + step2_resp)
+
+                    # 等待步骤3：DH 公钥交换
+                    resp_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
+                    resp_data = _recv_exact(conn, resp_len)
+                    step3_req = json.loads(resp_data.decode())
+
+                    if step3_req.get('type') != 'step3_dh_key_exchange':
+                        conn.close()
+                        continue
+
+                    # ========== 步骤3: 接收端处理 DH 公钥交换 ==========
+                    peer_dh_public = int(step3_req['dh_public'], 16)
+                    peer_dh_signature = bytes.fromhex(step3_req['dh_signature'])
+
+                    # 生成自己的 DH 密钥对
                     _dh_peer = DHPeer(bits=256)
                     my_dh_public = _dh_peer.get_public_key()
 
@@ -435,57 +632,58 @@ def start_negotiate_server():
                     my_dh_public_bytes = my_dh_public.to_bytes((my_dh_public.bit_length() + 7) // 8, 'big')
                     my_signature = rsa_sign(my_dh_public_bytes, get_rsa_keys()[1])
 
-                    # 发送本方公钥 + DH公钥 + 签名 + 监听端口
-                    pub_key = get_rsa_keys()[0]
-                    response = json.dumps({
-                        'type': 'negotiate_response',
-                        'rsa_e': pub_key[0],
-                        'rsa_n': pub_key[1],
+                    print(f"{'='*60}")
+                    print(f"  [接收端-步骤3] DH 公钥交换")
+                    print(f"    收到对方DH公钥: {hex(peer_dh_public)}")
+                    print(f"    对方DH签名:     {peer_dh_signature.hex()[:48]}...")
+                    print(f"    我的DH公钥:      {hex(my_dh_public)}")
+                    print(f"    我的DH签名:      {my_signature.hex()[:48]}...")
+                    print(f"{'='*60}\n")
+
+                    # 发送签名的 DH 公钥给对方
+                    step3_resp = json.dumps({
+                        'type': 'step3_dh_key_exchange',
                         'dh_public': hex(my_dh_public),
-                        'dh_signature': my_signature.hex(),
-                        'listen_port': LISTEN_PORT
+                        'dh_signature': my_signature.hex()
                     }).encode()
-                    conn.sendall(struct.pack('>I', len(response)) + response)
+                    conn.sendall(struct.pack('>I', len(step3_resp)) + step3_resp)
 
-                    # 接收对方信息
-                    resp_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
-                    resp_data = _recv_exact(conn, resp_len)
-                    peer_info = json.loads(resp_data.decode())
-
-                    peer_rsa_e = peer_info['rsa_e']
-                    peer_rsa_n = peer_info['rsa_n']
-                    peer_dh_public = int(peer_info['dh_public'], 16)
-                    peer_dh_signature = bytes.fromhex(peer_info['dh_signature'])
-                    peer_rsa_pub = (peer_rsa_e, peer_rsa_n)
-
-                    # 验证对方签名
+                    # ========== 步骤4: 验证对方签名 ==========
                     peer_dh_public_bytes = peer_dh_public.to_bytes((peer_dh_public.bit_length() + 7) // 8, 'big')
 
-                    # 调试信息：记录签名验证详情
-                    from sha256 import sha256 as _sha256
-                    actual_hash = int.from_bytes(_sha256(peer_dh_public_bytes), 'big')
-                    recovered_hash = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
-                    print(f"  [协商服务器] 签名验证: actual_hash={actual_hash}, recovered_hash={recovered_hash}, match={actual_hash==recovered_hash}")
-                    print(f"  [协商服务器] 对方RSA: e={peer_rsa_e}, n_bits={peer_rsa_n.bit_length()}")
-                    print(f"  [协商服务器] 对方DH公钥字节长度: {len(peer_dh_public_bytes)}")
+                    from sha256 import sha256 as _sha256_rec
+                    actual_hash_rec = int.from_bytes(_sha256_rec(peer_dh_public_bytes), 'big')
+                    recovered_hash_rec = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
+                    sig_match_rec = (actual_hash_rec == recovered_hash_rec)
+
+                    print(f"{'='*60}")
+                    print(f"  [接收端-步骤4] 验证对方签名...")
+                    print(f"    实际哈希值:   {hex(actual_hash_rec)}")
+                    print(f"    恢复的哈希值: {hex(recovered_hash_rec)}")
+                    print(f"    匹配结果: {'✓ 通过' if sig_match_rec else '✗ 失败'}")
+                    print(f"{'='*60}\n")
 
                     peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
-
                     _connection_state['peer_verified'] = peer_verified
-                    _connection_state['peer_public_key'] = {'e': peer_rsa_e, 'n_bits': peer_rsa_n.bit_length()}
-                    _connection_state['peer_public_key_raw'] = peer_rsa_pub
-                    _connection_state['peer_listen_port'] = peer_info.get('listen_port', peer_listen_port)
 
                     if peer_verified:
-                        # 计算共享密钥
+                        # ========== 步骤5: 计算共享会话密钥 ==========
                         _dh_peer.compute_shared_secret(peer_dh_public)
-                        _connection_state['session_key'] = _dh_peer.get_session_key().hex()
-                        _connection_state['hmac_key'] = _dh_peer.get_hmac_key().hex()
+                        session_key = _dh_peer.get_session_key()
+                        hmac_key = _dh_peer.get_hmac_key()
+
+                        _connection_state['session_key'] = session_key.hex()
+                        _connection_state['hmac_key'] = hmac_key.hex()
                         _connection_state['status'] = 'connected'
-                        print(f"  [协商服务器] 密钥协商完成，会话密钥已建立")
+
+                        print(f"{'='*60}")
+                        print(f"  [接收端-步骤5] 会话密钥生成完成 ✓")
+                        print(f"    AES会话密钥: {session_key.hex()}")
+                        print(f"    HMAC密钥:    {hmac_key.hex()}")
+                        print(f"{'='*60}\n")
                     else:
                         _connection_state['status'] = 'disconnected'
-                        print(f"  [协商服务器] 对方签名验证失败！")
+                        print(f"  [接收端] 对方签名验证失败！")
 
                 elif req.get('type') == 'data_transfer':
                     # 数据传输
