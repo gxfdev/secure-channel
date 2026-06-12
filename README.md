@@ -311,25 +311,173 @@ netstat -tlnp | grep -E "5000|9999"
 
 ## 使用说明
 
-1. 打开发送端 Web 界面 `http://发送端IP:5000`
-2. 在「建立连接」处输入接收端 IP 和端口，点击「连接」
-3. 观察 TCP 三次握手和 DH 密钥协商过程
-4. 点击「抓取数据包」采集真实网络流量
-5. 点击「加密并发送」将数据加密传输
-6. 在接收端 Web 界面查看解密后的原始数据
+### 双虚拟机部署完整指南（推荐）
+
+假设你有两台虚拟机：
+
+| 角色 | IP 地址 | 用途 |
+|------|---------|------|
+| **发送端** | `192.168.157.xxx` (你的机器A) | 主动发起连接、抓包、加密发送 |
+| **接收端** | `192.168.157.207` (你的机器B) | 被动监听连接、验证签名、解密数据 |
+
+#### 第一步：两台 VM 都安装 Docker
+
+```bash
+# CentOS / RHEL
+sudo yum install -y docker
+sudo systemctl enable --now docker
+
+# Ubuntu / Debian
+sudo apt install -y docker.io
+sudo systemctl enable --now docker
+
+# 验证
+docker --version
+```
+
+#### 第二步：在**接收端 VM** 上启动容器
+
+```bash
+# 进入项目目录（或使用镜像）
+cd /path/to/secure-channel
+
+# 方式 A: 使用 docker compose（推荐）
+echo "RECEIVER_HOST=127.0.0.1" > .env
+docker compose build && docker compose up -d receiver
+
+# 方式 B: 使用 docker run 命令
+docker run -d --name netsec-receiver \
+  --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  -v ./captured_data:/app/captured_data \
+  -e MODE=receiver \
+  -e FLASK_HOST=0.0.0.0 \
+  secure-channel:local   # 或 ghcr.io/gxfdev/secure-channel:main
+```
+
+确认接收端已启动：
+```bash
+docker logs netsec-receiver 2>&1 | tail -20
+# 应看到:
+#   协商服务器 监听 0.0.0.0:9999
+#   Web 界面: http://0.0.0.0:5000
+```
+
+浏览器打开 `http://192.168.157.207:5000`，应能看到 Web 界面。
+
+#### 第三步：在**发送端 VM** 上启动容器
+
+```bash
+cd /path/to/secure-channel
+
+# 方式 A: 使用 docker compose（推荐）
+# 将 RECEIVER_HOST 设为接收端 VM 的实际 IP！
+echo "RECEIVER_HOST=192.168.157.207" > .env
+docker compose build && docker compose up -d sender
+
+# 方式 B: 使用 docker run 命令
+docker run -d --name netsec-sender \
+  --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  -v ./captured_data:/app/captured_data \
+  -e MODE=sender \
+  -e RECEIVER_HOST=192.168.157.207 \
+  -e FLASK_HOST=0.0.0.0 \
+  secure-channel:local   # 或 ghcr.io/gxfdev/secure-channel:main
+```
+
+浏览器打开 `http://<发送端IP>:5000`，应能看到 Web 界面。
+
+#### 第四步：连通性测试（重要！）
+
+打开发送端 Web 界面后，**不要直接点「连接」**，先按以下顺序测试：
+
+1. **点击「检查本机服务」按钮**
+   - 绿色 = 发送端协商服务器正常（端口 9999 在监听）
+   - 红色 = 协商服务器未启动，检查 Docker 容器日志
+
+2. **输入接收端 IP `192.168.157.207` 和端口 `9999`**
+
+3. **点击「测试连通性」按钮**
+   - 全部绿色 = 网络通畅，可以连接
+   - DNS解析失败 = 检查 IP 是否正确
+   - TCP连接超时 = 检查防火墙是否开放 9999 端口
+   - 连接被拒绝 = 接收端容器未正常运行或端口未监听
+
+#### 第五步：建立连接
+
+1. 确保「测试连通性」通过
+2. 点击「连接」按钮
+3. 观察页面显示的三个步骤：
+   - 步骤 1: TCP 三次握手 ✓
+   - 步骤 2: DH 密钥协商 + 数字签名 ✓
+   - 步骤 3: 会话密钥生成 ✓
+4. 如果步骤 2 显示签名验证失败，查看容器日志：
+   ```bash
+   # 接收端日志
+   docker logs netsec-receiver 2>&1 | grep "签名验证"
+   # 发送端日志
+   docker logs netsec-sender 2>&1 | grep "签名验证"
+   ```
+
+#### 第六步：抓包和传输
+
+1. 连接成功后，输入抓包数量，点击「抓取数据包」
+2. 选择一条抓到的数据，点击「加密并发送」
+3. 打开接收端 Web 界面 `http://192.168.157.207:5000`
+4. 点击「刷新」，查看解密后的原始数据
+
+### 单机测试（同一台机器上运行两个终端）
+
+如果只有一台机器想快速测试：
+
+```bash
+# 终端 1: 启动接收端
+MODE=receiver FLASK_HOST=0.0.0.0 python app.py
+
+# 终端 2: 启动发送端
+MODE=sender RECEIVER_HOST=127.0.0.1 FLASK_HOST=0.0.0.0 python app.py
+
+# 浏览器打开 http://localhost:5000
+# 输入目标地址 127.0.0.1:9999，点击连接
+```
+
+### 直接运行（无 Docker）
+
+```bash
+pip install -r requirements.txt
+
+# 接收端
+MODE=receiver FLASK_HOST=0.0.0.0 python app.py
+
+# 发送端（将 <接收端IP> 替换为接收端的实际 IP）
+MODE=sender RECEIVER_HOST=<接收端IP> FLASK_HOST=0.0.0.0 python app.py
+```
+
+### Web 界面功能说明
+
+| 功能 | 按钮/操作 | 说明 |
+|------|----------|------|
+| 检查本机服务 | 「检查本机服务」 | 验证本机协商服务器是否在 9999 端口监听 |
+| 测试连通性 | 「测试连通性」 | 测试到目标主机的 TCP 连通性（DNS→TCP→协议） |
+| 建立连接 | 「连接」 | 建立 TCP 连接 + DH 密钥协商 + RSA 签名验证 |
+| 抓取数据包 | 「抓取数据包」 | 采集网络流量（需要 scapy） |
+| 加密并发送 | 「加密并发送」 | AES 加密 + HMAC 认证 + RSA 签名 → 发送 |
+| 刷新状态 | 「刷新状态」 | 更新连接状态显示 |
+| 测试算法 | 「测试所有算法」 | 运行所有自实现算法的单元测试 |
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MODE` | `sender` | 运行模式：`sender` 或 `receiver` |
-| `RECEIVER_HOST` | `127.0.0.1` | 接收端 IP 地址 |
+| `RECEIVER_HOST` | `127.0.0.1` | 接收端 IP 地址（发送端必须设为对方 VM 的 IP） |
 | `RECEIVER_PORT` | `9999` | 接收端监听端口 |
-| `LISTEN_PORT` | `9999` | 本端监听端口 |
+| `LISTEN_PORT` | `9999` | 本端协商服务器监听端口 |
 | `RSA_BITS` | `512` | RSA 密钥位数 |
 | `DATA_DIR` | `./captured_data` | 数据存储目录 |
 | `FLASK_HOST` | `0.0.0.0` | Flask 监听地址，跨主机必须设为 `0.0.0.0` |
-| `FLASK_PORT` | `5000` | Flask 监听端口 |
+| `FLASK_PORT` | `5000` | Flask Web 界面端口 |
 
 ## 项目结构
 

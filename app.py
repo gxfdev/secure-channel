@@ -64,6 +64,7 @@ _connection_state = {
 }
 _received_data = []
 _key_files = {'pub': None, 'priv': None}
+_negotiate_server_status = {'running': False, 'port': None, 'error': None}
 
 
 def get_rsa_keys():
@@ -110,7 +111,83 @@ def get_info():
         'public_key_n_hex': hex(n)[:40] + '...',
         'connection': _connection_state,
         'received_count': len(_received_data),
+        'negotiate_server': _negotiate_server_status,
     })
+
+
+@app.route('/api/health')
+def health_check():
+    """健康检查：协商服务器是否在监听"""
+    import subprocess
+    result = {
+        'negotiate_server': _negotiate_server_status,
+        'listen_port': LISTEN_PORT,
+        'port_listening': False,
+    }
+    # 检查端口是否在监听
+    try:
+        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        test_sock.settimeout(1)
+        test_sock.connect(('127.0.0.1', LISTEN_PORT))
+        test_sock.close()
+        result['port_listening'] = True
+    except:
+        result['port_listening'] = False
+    return jsonify(result)
+
+
+@app.route('/api/test_tcp', methods=['POST'])
+def test_tcp():
+    """测试与目标主机的 TCP 连通性"""
+    try:
+        data = request.get_json() or {}
+        host = data.get('host', RECEIVER_HOST)
+        port = int(data.get('port', LISTEN_PORT))
+        results = []
+
+        # 1. DNS 解析测试
+        try:
+            resolved_ip = socket.gethostbyname(host)
+            results.append({'step': 'DNS解析', 'ok': True, 'detail': f'{host} → {resolved_ip}'})
+        except Exception as e:
+            results.append({'step': 'DNS解析', 'ok': False, 'detail': str(e)})
+            return jsonify({'success': False, 'results': results, 'error': 'DNS解析失败'})
+
+        # 2. ICMP ping 测试（尝试连接）
+        start = time.time()
+        try:
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.settimeout(3)
+            test_sock.connect((host, port))
+            latency = round((time.time() - start) * 1000, 1)
+            test_sock.close()
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': True, 'detail': f'成功，延迟 {latency}ms'})
+        except socket.timeout:
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': False, 'detail': '连接超时（3秒），目标端口未开放或被防火墙阻止'})
+            return jsonify({'success': False, 'results': results, 'error': 'TCP连接超时'})
+        except ConnectionRefusedError:
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': False, 'detail': '连接被拒绝，目标端口未监听或服务未启动'})
+            return jsonify({'success': False, 'results': results, 'error': '连接被拒绝'})
+        except Exception as e:
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': False, 'detail': str(e)})
+            return jsonify({'success': False, 'results': results, 'error': str(e)})
+
+        # 3. 发送协商协议测试
+        try:
+            test_sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock2.settimeout(5)
+            test_sock2.connect((host, port))
+            # 发送一个简单的 ping 消息
+            ping_msg = json.dumps({'type': 'ping'}).encode()
+            test_sock2.sendall(struct.pack('>I', len(ping_msg)) + ping_msg)
+            test_sock2.close()
+            results.append({'step': '协议通信', 'ok': True, 'detail': '协商协议消息已发送'})
+        except Exception as e:
+            results.append({'step': '协议通信', 'ok': False, 'detail': str(e)})
+
+        return jsonify({'success': True, 'results': results})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
 # ==================== 连接建立 API ====================
@@ -171,6 +248,12 @@ def api_connect():
         # 实际建立 TCP 连接
         try:
             sock.connect((target_host, target_port))
+        except socket.timeout:
+            _connection_state['status'] = 'disconnected'
+            return jsonify({'success': False, 'error': f'TCP连接超时: 无法连接到 {target_host}:{target_port}，请检查：1)目标主机是否可达 2)目标端口{target_port}是否开放 3)防火墙是否放行 4)接收端协商服务器是否启动', 'steps': result['steps']})
+        except ConnectionRefusedError:
+            _connection_state['status'] = 'disconnected'
+            return jsonify({'success': False, 'error': f'连接被拒绝: {target_host}:{target_port}，目标端口未监听或服务未启动。请确认接收端容器已运行且协商服务器在端口{target_port}上监听', 'steps': result['steps']})
         except Exception as e:
             _connection_state['status'] = 'disconnected'
             return jsonify({'success': False, 'error': f'TCP连接失败: {e}', 'steps': result['steps']})
@@ -200,6 +283,7 @@ def api_connect():
         peer_listen_port = peer_info.get('listen_port', LISTEN_PORT)
         _connection_state['peer_listen_port'] = peer_listen_port
         _connection_state['peer_public_key'] = {'e': peer_rsa_e, 'n_bits': peer_rsa_n.bit_length()}
+        _connection_state['peer_public_key_raw'] = peer_rsa_pub
 
         # ===== 步骤3: 生成 DH 密钥对 =====
         _dh_peer = DHPeer(bits=256)
@@ -222,6 +306,15 @@ def api_connect():
 
         # ===== 步骤4: 验证对方签名 =====
         peer_dh_public_bytes = peer_dh_public.to_bytes((peer_dh_public.bit_length() + 7) // 8, 'big')
+
+        # 调试信息：记录签名验证详情
+        from sha256 import sha256 as _sha256_dbg
+        actual_hash_dbg = int.from_bytes(_sha256_dbg(peer_dh_public_bytes), 'big')
+        recovered_hash_dbg = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
+        print(f"  [发送端] 签名验证: actual_hash={actual_hash_dbg}, recovered_hash={recovered_hash_dbg}, match={actual_hash_dbg==recovered_hash_dbg}")
+        print(f"  [发送端] 对方RSA: e={peer_rsa_e}, n_bits={peer_rsa_n.bit_length()}")
+        print(f"  [发送端] 对方DH公钥字节长度: {len(peer_dh_public_bytes)}")
+
         peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
 
         _connection_state['peer_verified'] = peer_verified
@@ -293,14 +386,20 @@ def start_negotiate_server():
         return
 
     def server_thread():
-        global _dh_peer, _connection_state
-        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.settimeout(300)
-        server_sock.bind(('0.0.0.0', LISTEN_PORT))
-        server_sock.listen(5)
-        print(f"  [协商服务器] 监听 0.0.0.0:{LISTEN_PORT}")
-        _negotiate_server_running = True
+        global _dh_peer, _connection_state, _negotiate_server_status
+        try:
+            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_sock.settimeout(300)
+            server_sock.bind(('0.0.0.0', LISTEN_PORT))
+            server_sock.listen(5)
+            print(f"  [协商服务器] 监听 0.0.0.0:{LISTEN_PORT}")
+            _negotiate_server_running = True
+            _negotiate_server_status = {'running': True, 'port': LISTEN_PORT, 'error': None}
+        except Exception as e:
+            print(f"  [协商服务器] 启动失败: {e}")
+            _negotiate_server_status = {'running': False, 'port': LISTEN_PORT, 'error': str(e)}
+            return
 
         while True:
             try:
@@ -319,7 +418,15 @@ def start_negotiate_server():
                 # 保存对方的监听端口
                 peer_listen_port = req.get('listen_port', LISTEN_PORT)
 
-                if req.get('type') == 'negotiate_request':
+                if req.get('type') == 'ping':
+                    # 连通性测试，直接回复 pong
+                    pong = json.dumps({'type': 'pong', 'mode': MODE, 'listen_port': LISTEN_PORT}).encode()
+                    conn.sendall(struct.pack('>I', len(pong)) + pong)
+                    conn.close()
+                    _connection_state['status'] = _connection_state.get('status', 'disconnected')
+                    continue
+
+                elif req.get('type') == 'negotiate_request':
                     # 生成 DH 密钥对
                     _dh_peer = DHPeer(bits=256)
                     my_dh_public = _dh_peer.get_public_key()
@@ -353,10 +460,20 @@ def start_negotiate_server():
 
                     # 验证对方签名
                     peer_dh_public_bytes = peer_dh_public.to_bytes((peer_dh_public.bit_length() + 7) // 8, 'big')
+
+                    # 调试信息：记录签名验证详情
+                    from sha256 import sha256 as _sha256
+                    actual_hash = int.from_bytes(_sha256(peer_dh_public_bytes), 'big')
+                    recovered_hash = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
+                    print(f"  [协商服务器] 签名验证: actual_hash={actual_hash}, recovered_hash={recovered_hash}, match={actual_hash==recovered_hash}")
+                    print(f"  [协商服务器] 对方RSA: e={peer_rsa_e}, n_bits={peer_rsa_n.bit_length()}")
+                    print(f"  [协商服务器] 对方DH公钥字节长度: {len(peer_dh_public_bytes)}")
+
                     peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
 
                     _connection_state['peer_verified'] = peer_verified
                     _connection_state['peer_public_key'] = {'e': peer_rsa_e, 'n_bits': peer_rsa_n.bit_length()}
+                    _connection_state['peer_public_key_raw'] = peer_rsa_pub
                     _connection_state['peer_listen_port'] = peer_info.get('listen_port', peer_listen_port)
 
                     if peer_verified:
@@ -388,7 +505,7 @@ def start_negotiate_server():
 
 
 def _handle_data_transfer(conn, req):
-    """处理数据传输"""
+    """处理数据传输（含 RSA 签名验证）"""
     global _received_data
     try:
         session_key = _dh_peer.get_session_key()
@@ -398,20 +515,27 @@ def _handle_data_transfer(conn, req):
         data_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
         encrypted_packet = _recv_exact(conn, data_len)
 
+        # 读取 RSA 签名
+        sig_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
+        signature = _recv_exact(conn, sig_len)
+
         # 解析数据包
         from network import unpack_packet
         ct, _, _, recv_iv, recv_hmac = unpack_packet(encrypted_packet)
+
+        # RSA 签名验证（不可否认性 + 真实性）
+        sig_verified = rsa_verify(ct, signature, _connection_state.get('peer_public_key_raw', get_rsa_keys()[0]))
 
         # HMAC 验证（完整性）
         computed_hmac = hmac_sha256(hmac_key, ct)
         hmac_valid = (computed_hmac == recv_hmac)
 
-        if hmac_valid:
+        if hmac_valid and sig_verified:
             decrypted = aes_decrypt(ct, session_key, mode='cbc', iv=recv_iv)
             decrypted_text = decrypted.decode('utf-8')
 
             # 保存到文件
-            filename = f"received_{int(time.time())}.json"
+            filename = f"received_{int(time.time()*1000)}.json"
             filepath = os.path.join(DATA_DIR, filename)
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(decrypted_text)
@@ -419,20 +543,27 @@ def _handle_data_transfer(conn, req):
             record = {
                 'time': time.strftime("%Y-%m-%d %H:%M:%S"),
                 'hmac_valid': True,
+                'sig_verified': True,
                 'decrypted_data': decrypted_text,
                 'saved_to': os.path.abspath(filepath),
                 'ciphertext_hex': ct.hex()[:128] + '...',
                 'session_key_hex': session_key.hex(),
                 'hmac_key_hex': hmac_key.hex(),
                 'iv_hex': recv_iv.hex() if recv_iv else '',
-                'hmac_value': recv_hmac.hex()
+                'hmac_value': recv_hmac.hex(),
+                'signature_hex': signature.hex()[:64] + '...'
             }
         else:
             record = {
                 'time': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'hmac_valid': False,
-                'error': 'HMAC验证失败，数据可能被篡改！'
+                'hmac_valid': hmac_valid,
+                'sig_verified': sig_verified,
+                'error': ''
             }
+            if not hmac_valid:
+                record['error'] += 'HMAC验证失败，数据可能被篡改！'
+            if not sig_verified:
+                record['error'] += ' RSA签名验证失败，数据来源不可信！'
 
         _received_data.append(record)
 
@@ -440,6 +571,7 @@ def _handle_data_transfer(conn, req):
         _received_data.append({
             'time': time.strftime("%Y-%m-%d %H:%M:%S"),
             'hmac_valid': False,
+            'sig_verified': False,
             'error': str(e)
         })
 
@@ -672,7 +804,11 @@ def test_algorithms():
         dec = rsa_decrypt_bytes(enc, priv)
         sig = rsa_sign(td, priv)
         verified = rsa_verify(td, sig, pub)
-        results['RSA+签名'] = 'PASS' if dec == td and verified else 'FAIL'
+        # 额外测试: 跨密钥验证应失败
+        pub2, priv2 = generate_keypair(RSA_BITS)
+        sig2 = rsa_sign(td, priv2)
+        cross_verified = rsa_verify(td, sig2, pub)
+        results['RSA+签名'] = 'PASS' if dec == td and verified and not cross_verified else 'FAIL'
     except Exception as e:
         results['RSA+签名'] = f'ERROR: {e}'
 

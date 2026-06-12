@@ -134,6 +134,11 @@
                             <input id="targetPort" class="input w24" placeholder="端口" value="9999">
                             <button id="btnConnect" class="btn btn-blue" onclick="doConnect()">连接</button>
                         </div>
+                        <div class="flex gap2 mb2">
+                            <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" onclick="testTcp()">测试连通性</button>
+                            <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" onclick="checkHealth()">检查本机服务</button>
+                            <span id="testResult" class="text-xs text-slate400"></span>
+                        </div>
                         <div id="connectResult" class="hidden"></div>
                     </div>
 
@@ -268,6 +273,15 @@ async function loadInfo() {
         document.getElementById('pubKeyInfo').textContent = 'e='+sysInfo.public_key_e+', n='+sysInfo.public_key_n_hex+'...';
         if (sysInfo.receiver_host && sysInfo.receiver_host!=='127.0.0.1') document.getElementById('targetHost').value = sysInfo.receiver_host;
         updateConnUI(sysInfo.connection);
+        // 显示协商服务器状态
+        if (sysInfo.negotiate_server) {
+            var ns = sysInfo.negotiate_server;
+            if (ns.running) {
+                log('协商服务器运行中 (端口'+ns.port+')','success');
+            } else if (ns.error) {
+                log('协商服务器异常: '+ns.error,'error');
+            }
+        }
         log('系统信息加载完成','success');
     } catch(e) { log('加载失败: '+e.message,'error'); }
 }
@@ -465,6 +479,62 @@ async function testAlgo() {
         document.getElementById('algoResult').innerHTML = html;
         log('算法测试完成','success');
     } catch(e) { log('测试失败: '+e.message,'error'); }
+}
+
+async function testTcp() {
+    var host = document.getElementById('targetHost').value.trim();
+    var port = document.getElementById('targetPort').value.trim();
+    if (!host) { log('请输入目标IP','warn'); return; }
+    var el = document.getElementById('testResult');
+    el.textContent = '测试中...';
+    el.style.color = '#fbbf24';
+    try {
+        var resp = await fetch('/api/test_tcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
+        var r = await resp.json();
+        if (r.success) {
+            el.textContent = '连通性测试通过';
+            el.style.color = '#4ade80';
+            log('TCP连通性测试: '+host+':'+port+' 可达','success');
+        } else {
+            el.textContent = r.error || '连接失败';
+            el.style.color = '#f87171';
+            log('TCP连通性测试失败: '+(r.error||'未知错误'),'error');
+        }
+        if (r.results) {
+            r.results.forEach(function(item) {
+                log('  '+item.step+': '+(item.ok?'OK - ':'FAIL - ')+item.detail, item.ok?'success':'error');
+            });
+        }
+    } catch(e) {
+        el.textContent = '测试失败: '+e.message;
+        el.style.color = '#f87171';
+        log('测试请求失败: '+e.message,'error');
+    }
+}
+
+async function checkHealth() {
+    var el = document.getElementById('testResult');
+    el.textContent = '检查中...';
+    el.style.color = '#fbbf24';
+    try {
+        var resp = await fetch('/api/health');
+        var r = await resp.json();
+        var ns = r.negotiate_server || {};
+        if (r.port_listening) {
+            el.textContent = '本机协商服务器正常 (端口'+r.listen_port+')';
+            el.style.color = '#4ade80';
+            log('本机服务检查: 协商服务器在端口'+r.listen_port+'正常监听','success');
+        } else {
+            el.textContent = '协商服务器未运行! 端口'+r.listen_port+'未监听';
+            el.style.color = '#f87171';
+            log('本机服务检查: 协商服务器未运行! '+(ns.error||'端口'+r.listen_port+'未监听'),'error');
+            if (ns.error) log('  错误详情: '+ns.error,'error');
+        }
+    } catch(e) {
+        el.textContent = '检查失败: '+e.message;
+        el.style.color = '#f87171';
+        log('健康检查失败: '+e.message,'error');
+    }
 }
 
 setInterval(function() {

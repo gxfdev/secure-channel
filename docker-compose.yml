@@ -11,11 +11,11 @@ services:
       - RECEIVER_PORT=9999
       - RSA_BITS=512
       - DATA_DIR=/app/captured_data
-    ports:
-      - "5000:5000"     # Web管理界面
+      - FLASK_HOST=0.0.0.0
+      - LISTEN_PORT=9999
+    network_mode: host   # 使用主机网络，以便抓包和直连
     volumes:
       - sender_data:/app/captured_data  # 数据包存储
-    network_mode: host   # 使用主机网络，以便抓包和直连
     cap_add:
       - NET_ADMIN        # 允许网络管理（scapy抓包需要）
       - NET_RAW          # 允许原始套接字
@@ -30,9 +30,8 @@ services:
       - LISTEN_PORT=9999
       - RSA_BITS=512
       - DATA_DIR=/app/captured_data
-    ports:
-      - "5000:5000"     # Web管理界面
-      - "9999:9999"     # 数据接收端口
+      - FLASK_HOST=0.0.0.0
+    network_mode: host   # 使用主机网络，确保协商端口直接可达
     volumes:
       - receiver_data:/app/captured_data  # 数据包存储
     cap_add:
