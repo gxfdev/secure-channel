@@ -28,14 +28,10 @@ jobs:
         with:
           images: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}
           tags: |
-            # main/master 分支 → :main 标签
             type=ref,event=branch
-            # v1.0.0 标签 → :1.0.0 和 :1.0 标签
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # 始终打 :latest
-            type=raw,value=latest,enable={{is_default_branch}}
-            # 短 SHA
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,prefix=
 
       - name: 构建并推送镜像
