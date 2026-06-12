@@ -15,6 +15,16 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      # ========== 调试步骤：打印 Secrets 信息（不泄露密码原文） ==========
+      - name: 调试 Secrets
+        run: |
+          echo "ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}"
+          echo "ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}"
+          echo -n "ALIYUN_PASSWORD length: "
+          echo -n "${{ secrets.ALIYUN_PASSWORD }}" | wc -c
+          echo "ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}"
+      # ===============================================================
+
       - name: 登录阿里云ACR
         uses: docker/login-action@v3
         with:
