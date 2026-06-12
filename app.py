@@ -190,6 +190,24 @@ def test_tcp():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/set_mode', methods=['POST'])
+def set_mode():
+    """运行时切换模式（发送端/接收端）"""
+    global MODE, _negotiate_server_running, _negotiate_server_status
+    data = request.get_json() or {}
+    new_mode = data.get('mode', '')
+    if new_mode not in ('sender', 'receiver'):
+        return jsonify({'success': False, 'error': '模式必须是 sender 或 receiver'})
+    if new_mode == MODE:
+        return jsonify({'success': True, 'mode': MODE, 'message': f'已经是{("发送端" if MODE=="sender" else "接收端")}模式'})
+    MODE = new_mode
+    # 如果协商服务器还没启动，启动它
+    if not _negotiate_server_running:
+        start_negotiate_server()
+    mode_label = '发送端' if MODE == 'sender' else '接收端'
+    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{mode_label}模式'})
+
+
 # ==================== 连接建立 API ====================
 
 @app.route('/api/connect', methods=['POST'])
@@ -230,6 +248,12 @@ def api_connect():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(10)
 
+        # 生成真实的 TCP 参数（模拟实际握手报文）
+        seq1 = random.randint(100000000, 999999999)
+        seq2 = random.randint(100000000, 999999999)
+        win_size = random.choice([8192, 16384, 32768, 65535])
+        mss = 1460
+
         handshake_info = [
             {'step': 1, 'dir': '→', 'from': f'{local_ip}:{local_port}', 'to': f'{target_host}:{target_port}',
              'flag': 'SYN', 'desc': '发送 SYN 包，请求建立连接'},
@@ -244,14 +268,44 @@ def api_connect():
             'id': 1,
             'title': '步骤1: TCP 三次握手',
             'status': 'success',
-            'description': '与接收端建立可靠的 TCP 连接',
+            'description': '与接收端建立可靠的 TCP 连接（三次握手保证双方收发能力正常）',
             'detail': {
-                '本地地址': f'{local_ip}:{local_port}',
-                '目标地址': f'{target_host}:{target_port}',
-                '过程': [
-                    ('→ SYN', f'从 {local_ip}:{local_port} 发送到 {target_host}:{target_port}', '请求建立连接'),
-                    ('← SYN+ACK', f'从 {target_host}:{target_port} 返回到 {local_ip}:{local_port}', '对方确认'),
-                    ('→ ACK', f'从 {local_ip}:{local_port} 发送到 {target_host}:{target_port}', '握手完成'),
+                '连接参数': {
+                    '发送端(本机)': f'{local_ip}:{local_port}',
+                    '接收端(目标)': f'{target_host}:{target_port}',
+                    '协议': 'TCP (Transmission Control Protocol)',
+                    '窗口大小': str(win_size),
+                    'MSS': str(mss)
+                },
+                '第1次握手 (SYN)': {
+                    '方向': f'{local_ip}:{local_port} → {target_host}:{target_port}',
+                    '标志位': 'SYN=1',
+                    '序列号(seq)': str(seq1),
+                    '确认号(ack)': '0 (首次握手无确认号)',
+                    '窗口大小': str(win_size),
+                    'TCP选项': f'MSS={mss}',
+                    '含义': '发送端告诉接收端：我想建立连接，我的初始序列号是'+str(seq1)
+                },
+                '第2次握手 (SYN+ACK)': {
+                    '方向': f'{target_host}:{target_port} → {local_ip}:{local_port}',
+                    '标志位': 'SYN=1, ACK=1',
+                    '序列号(seq)': str(seq2),
+                    '确认号(ack)': str(seq1 + 1),
+                    '窗口大小': str(win_size),
+                    '含义': '接收端确认收到SYN(ack=seq1+1)，同时发送自己的初始序列号'+str(seq2)
+                },
+                '第3次握手 (ACK)': {
+                    '方向': f'{local_ip}:{local_port} → {target_host}:{target_port}',
+                    '标志位': 'ACK=1',
+                    '序列号(seq)': str(seq1 + 1),
+                    '确认号(ack)': str(seq2 + 1),
+                    '窗口大小': str(win_size),
+                    '含义': '发送端确认收到SYN+ACK(ack=seq2+1)，连接正式建立'
+                },
+                '握手总结': [
+                    ('SYN →', '发送端发起连接请求', 'seq='+str(seq1)),
+                    ('← SYN+ACK', '接收端确认并发起连接', 'seq='+str(seq2)+', ack='+str(seq1+1)),
+                    ('ACK →', '发送端确认连接', 'seq='+str(seq1+1)+', ack='+str(seq2+1)),
                 ]
             }
         })
