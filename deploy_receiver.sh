@@ -2,7 +2,7 @@
 # 接收端一键部署脚本 (node7: 192.168.157.207)
 # 自动拉取最新镜像 + 停止旧容器 + 启动新容器
 
-IMAGE="crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcs/grcs:latest"
+IMAGE="crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest"
 CONTAINER="netsec-receiver"
 
 echo "===== 接收端一键部署 ====="

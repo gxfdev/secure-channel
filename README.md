@@ -116,7 +116,7 @@ sudo systemctl stop firewalld
 docker login --username=Agr123 crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com
 
 # 拉取镜像
-docker pull crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcs/grcs:latest
+docker pull crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest
 ```
 
 ### 第四步：启动接收端容器
@@ -131,7 +131,7 @@ docker run -d --name netsec-receiver \
   -e FLASK_HOST=0.0.0.0 \
   -e FLASK_PORT=5001 \
   -e LISTEN_PORT=9999 \
-  crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcs/grcs:latest
+  crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest
 ```
 
 验证接收端启动成功：
@@ -156,7 +156,7 @@ docker run -d --name netsec-sender \
   -e FLASK_HOST=0.0.0.0 \
   -e FLASK_PORT=5000 \
   -e LISTEN_PORT=9999 \
-  crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcs/grcs:latest
+  crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest
 ```
 
 验证发送端启动成功：
