@@ -92,23 +92,57 @@ def index():
 @app.route('/api/info')
 def get_info():
     net_info = get_network_info()
-    pub_key, _ = get_rsa_keys()
+    pub_key, priv_key = get_rsa_keys()
     e, n = pub_key
+    d, _ = priv_key
+
+    # 构建密钥信息
+    key_info = {
+        'rsa': {
+            'public_key': {
+                'e': e,
+                'n': hex(n),
+                'n_bits': n.bit_length(),
+            },
+            'private_key': {
+                'd': hex(d),
+                'd_bits': d.bit_length(),
+            },
+            'public_key_file': _key_files.get('pub', ''),
+            'private_key_file': _key_files.get('priv', ''),
+        },
+        'dh': None,
+        'session': None,
+    }
+
+    # 如果已建立连接，显示DH和会话密钥
+    if _dh_peer:
+        key_info['dh'] = {
+            'private_key': hex(_dh_peer.private_key),
+            'public_key': hex(_dh_peer.public_key),
+            'shared_secret': hex(_dh_peer.shared_secret) if _dh_peer.shared_secret else None,
+        }
+    if _connection_state.get('session_key'):
+        key_info['session'] = {
+            'aes_key': _connection_state['session_key'],
+            'hmac_key': _connection_state['hmac_key'],
+        }
+
     return jsonify({
         'mode': MODE,
         'hostname': net_info['hostname'],
         'ip': net_info.get('ip_address', '127.0.0.1'),
         'interfaces': net_info.get('interfaces', []),
+        'scapy_interfaces': net_info.get('scapy_interfaces', []),
         'receiver_host': RECEIVER_HOST,
         'receiver_port': RECEIVER_PORT,
         'listen_port': LISTEN_PORT,
         'scapy_available': HAS_SCAPY,
         'rsa_bits': RSA_BITS,
         'data_dir': os.path.abspath(DATA_DIR),
-        'public_key_file': _key_files.get('pub', ''),
-        'private_key_file': _key_files.get('priv', ''),
         'public_key_e': e,
-        'public_key_n_hex': hex(n)[:40] + '...',
+        'public_key_n_hex': hex(n),
+        'key_info': key_info,
         'connection': _connection_state,
         'received_count': len(_received_data),
         'negotiate_server': _negotiate_server_status,
@@ -599,6 +633,67 @@ def api_connect():
         except:
             pass
         return jsonify({'success': False, 'error': f'连接异常: {e}', 'detail': traceback.format_exc()})
+
+
+@app.route('/api/debug_connect', methods=['POST'])
+def debug_connect():
+    """调试连接：逐步测试，返回每一步的详细结果"""
+    try:
+        data = request.get_json() or {}
+        host = data.get('host', RECEIVER_HOST)
+        port = int(data.get('port', LISTEN_PORT))
+        results = []
+
+        # 步骤1: TCP连接
+        print(f"  [调试] 步骤1: TCP连接 {host}:{port}")
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((host, port))
+            results.append({'step': 'TCP连接', 'ok': True, 'detail': f'成功连接 {host}:{port}'})
+        except socket.timeout:
+            results.append({'step': 'TCP连接', 'ok': False, 'detail': f'连接超时 {host}:{port}'})
+            return jsonify({'success': False, 'results': results})
+        except ConnectionRefusedError:
+            results.append({'step': 'TCP连接', 'ok': False, 'detail': f'连接被拒绝 {host}:{port}，对方9999端口未监听'})
+            return jsonify({'success': False, 'results': results})
+        except Exception as e:
+            results.append({'step': 'TCP连接', 'ok': False, 'detail': str(e)})
+            return jsonify({'success': False, 'results': results})
+
+        # 步骤2: 发送ping
+        print(f"  [调试] 步骤2: 发送ping")
+        try:
+            ping_msg = json.dumps({'type': 'ping'}).encode()
+            sock.sendall(struct.pack('>I', len(ping_msg)) + ping_msg)
+            results.append({'step': '发送ping', 'ok': True, 'detail': '已发送ping请求'})
+        except Exception as e:
+            results.append({'step': '发送ping', 'ok': False, 'detail': str(e)})
+            sock.close()
+            return jsonify({'success': False, 'results': results})
+
+        # 步骤3: 读取pong
+        print(f"  [调试] 步骤3: 读取pong")
+        try:
+            pong_len_data = _recv_exact(sock, 4, timeout=5)
+            pong_len = struct.unpack('>I', pong_len_data)[0]
+            if pong_len > 10000:
+                results.append({'step': '读取pong', 'ok': False, 'detail': f'响应长度异常: {pong_len}'})
+                sock.close()
+                return jsonify({'success': False, 'results': results})
+            pong_data = _recv_exact(sock, pong_len, timeout=5)
+            pong = json.loads(pong_data.decode())
+            results.append({'step': '读取pong', 'ok': True, 'detail': f'对方模式: {pong.get("mode")}, 监听端口: {pong.get("listen_port")}'})
+        except Exception as e:
+            results.append({'step': '读取pong', 'ok': False, 'detail': f'读取pong失败: {e}'})
+            sock.close()
+            return jsonify({'success': False, 'results': results})
+
+        sock.close()
+        results.append({'step': '结论', 'ok': True, 'detail': 'TCP连接和协议通信均正常，可以尝试正式连接'})
+        return jsonify({'success': True, 'results': results})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
 # ==================== 接收端协商服务 ====================

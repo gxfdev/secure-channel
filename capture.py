@@ -59,6 +59,46 @@ def _get_interfaces():
         return []
 
 
+def _auto_select_interface():
+    """自动选择有IP地址的网卡接口（优先选择非loopback）"""
+    if not HAS_SCAPY:
+        return None
+    try:
+        from scapy.all import get_if_list, get_if_addr, conf
+        # 优先使用scapy默认接口
+        default_iface = conf.iface
+        if default_iface:
+            try:
+                ip = get_if_addr(str(default_iface))
+                if ip and ip != '0.0.0.0' and not ip.startswith('127.'):
+                    return str(default_iface)
+            except:
+                pass
+
+        # 遍历所有接口，找有非loopback IP的
+        for iface_name in get_if_list():
+            try:
+                ip = get_if_addr(str(iface_name))
+                if ip and ip != '0.0.0.0' and not ip.startswith('127.'):
+                    return str(iface_name)
+            except:
+                continue
+
+        # 回退：找任何有IP的接口
+        for iface_name in get_if_list():
+            try:
+                ip = get_if_addr(str(iface_name))
+                if ip and ip != '0.0.0.0':
+                    return str(iface_name)
+            except:
+                continue
+
+        # 最后回退到None（让scapy自己选）
+        return None
+    except:
+        return None
+
+
 def capture_packets_scapy(count=10, timeout=15, interface=None, filter_rule="ip"):
     """
     使用 scapy 抓取网络数据包（详细版）
@@ -86,17 +126,32 @@ def capture_packets_scapy(count=10, timeout=15, interface=None, filter_rule="ip"
         'interfaces': ifaces
     })
 
-    if interface:
+    # 自动选择网卡（如果未指定）
+    if not interface:
+        interface = _auto_select_interface()
+        if interface:
+            capture_log.append({
+                'time': time.strftime("%H:%M:%S"),
+                'event': 'select_iface',
+                'detail': f'自动选择网卡: {interface}'
+            })
+        else:
+            capture_log.append({
+                'time': time.strftime("%H:%M:%S"),
+                'event': 'select_iface',
+                'detail': '未指定网卡，使用scapy默认接口'
+            })
+    else:
         capture_log.append({
             'time': time.strftime("%H:%M:%S"),
             'event': 'select_iface',
-            'detail': f'选择网卡: {interface}'
+            'detail': f'手动选择网卡: {interface}'
         })
 
     capture_log.append({
         'time': time.strftime("%H:%M:%S"),
         'event': 'start',
-        'detail': f'开始抓包... (BPF过滤器: "{filter_rule}")'
+        'detail': f'开始抓包... (接口: {interface}, BPF过滤器: "{filter_rule}")'
     })
 
     start_time = time.time()

@@ -114,7 +114,14 @@
                 <div><span class="text-slate500">RSA:</span> <span id="infoRSA">-</span></div>
                 <div><span class="text-slate500">Scapy:</span> <span id="infoScapy">-</span></div>
             </div>
-            <div class="mt2"><span class="text-xs text-slate500">RSA公钥 (e, n):</span> <span id="pubKeyInfo" class="text-xs font-mono text-blue400">-</span></div>
+        </div>
+
+        <!-- 密钥数据 -->
+        <div class="card mb4" style="border-color:#7c3aed">
+            <div class="card-title" style="color:#a78bfa">&#128273; 密钥数据</div>
+            <div id="keyDataPanel" class="text-xs">
+                <div class="text-slate500" style="text-align:center;padding:8px 0">加载中...</div>
+            </div>
         </div>
 
         <!-- ====== 发送端面板 ====== -->
@@ -140,6 +147,7 @@
                     </div>
                     <div class="flex gap2 mb2">
                         <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" onclick="testTcp()">测试连通性</button>
+                        <button class="btn btn-sm" style="background:#7c3aed;color:white" onclick="debugConnect()">调试连接</button>
                         <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" onclick="checkHealth()">检查本机服务</button>
                         <span id="testResult" class="text-xs text-slate400"></span>
                     </div>
@@ -280,6 +288,53 @@ function renderDetail(detail) {
     return html;
 }
 
+// ==================== 渲染密钥数据 ====================
+function renderKeyData(info) {
+    var el = document.getElementById('keyDataPanel');
+    if (!el) return;
+    var ki = info.key_info;
+    if (!ki) { el.innerHTML = '<div class="text-slate500">无密钥数据</div>'; return; }
+
+    var html = '';
+
+    // RSA 密钥
+    if (ki.rsa) {
+        html += '<div style="margin-bottom:12px">';
+        html += '<div style="color:#60a5fa;font-weight:700;margin-bottom:6px">RSA 密钥对 ('+info.rsa_bits+'位)</div>';
+        html += '<div class="data-row"><span class="data-key">公钥 e (指数)</span><span class="data-val font-mono" style="color:#4ade80">'+esc(String(ki.rsa.public_key.e))+'</span></div>';
+        html += '<div class="data-row"><span class="data-key">公钥 n (模数)</span><span class="data-val font-mono" style="color:#4ade80;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.rsa.public_key.n.substring(0,80))+'... ('+ki.rsa.public_key.n_bits+'位)</span></div>';
+        html += '<div class="data-row"><span class="data-key">私钥 d</span><span class="data-val font-mono" style="color:#fbbf24;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.rsa.private_key.d.substring(0,80))+'... ('+ki.rsa.private_key.d_bits+'位)</span></div>';
+        if (ki.rsa.public_key_file) html += '<div class="data-row"><span class="data-key">公钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.rsa.public_key_file)+'</span></div>';
+        if (ki.rsa.private_key_file) html += '<div class="data-row"><span class="data-key">私钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.rsa.private_key_file)+'</span></div>';
+        html += '</div>';
+    }
+
+    // DH 密钥
+    if (ki.dh) {
+        html += '<div style="margin-bottom:12px">';
+        html += '<div style="color:#f59e0b;font-weight:700;margin-bottom:6px">DH 密钥协商</div>';
+        html += '<div class="data-row"><span class="data-key">DH私钥</span><span class="data-val font-mono" style="color:#fbbf24;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.private_key.substring(0,60))+'...</span></div>';
+        html += '<div class="data-row"><span class="data-key">DH公钥</span><span class="data-val font-mono" style="color:#4ade80;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.public_key.substring(0,60))+'...</span></div>';
+        if (ki.dh.shared_secret) html += '<div class="data-row"><span class="data-key">共享秘密</span><span class="data-val font-mono" style="color:#a78bfa;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.shared_secret.substring(0,60))+'...</span></div>';
+        html += '</div>';
+    }
+
+    // 会话密钥
+    if (ki.session) {
+        html += '<div style="margin-bottom:12px">';
+        html += '<div style="color:#10b981;font-weight:700;margin-bottom:6px">会话密钥 (已协商)</div>';
+        html += '<div class="data-row"><span class="data-key">AES-128密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(ki.session.aes_key)+'</span></div>';
+        html += '<div class="data-row"><span class="data-key">HMAC-SHA256密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(ki.session.hmac_key)+'</span></div>';
+        html += '</div>';
+    }
+
+    if (!ki.rsa && !ki.dh && !ki.session) {
+        html += '<div class="text-slate500" style="text-align:center;padding:8px 0">RSA密钥正在生成中...</div>';
+    }
+
+    el.innerHTML = html;
+}
+
 // ==================== 模式切换 ====================
 async function setMode(mode) {
     var btnS = document.getElementById('btnModeSender');
@@ -359,7 +414,9 @@ async function loadInfo() {
         document.getElementById('infoPort').textContent = sysInfo.listen_port;
         document.getElementById('infoRSA').textContent = sysInfo.rsa_bits+' 位';
         document.getElementById('infoScapy').textContent = sysInfo.scapy_available?'可用':'不可用';
-        document.getElementById('pubKeyInfo').textContent = 'e='+sysInfo.public_key_e+', n='+sysInfo.public_key_n_hex+'...';
+
+        // 渲染密钥数据面板
+        renderKeyData(sysInfo);
 
         // 接收端面板的端口提示
         var hint = document.getElementById('recvListenPortHint');
@@ -610,6 +667,22 @@ async function testTcp() {
         }
         if (r.results) r.results.forEach(function(item) { log('  '+item.step+': '+(item.ok?'OK':'FAIL')+' '+item.detail, item.ok?'success':'error'); });
     } catch(e) { el.textContent = '失败'; el.style.color = '#f87171'; log('测试失败: '+e.message,'error'); }
+}
+
+async function debugConnect() {
+    var host = document.getElementById('targetHost').value.trim();
+    var port = document.getElementById('targetPort').value.trim();
+    if (!host) { log('请输入目标IP','warn'); return; }
+    log('调试连接: 逐步测试 '+host+':'+port+' ...','info');
+    try {
+        var resp = await fetch('/api/debug_connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
+        var r = await resp.json();
+        (r.results||[]).forEach(function(item) {
+            log('  '+item.step+': '+(item.ok?'OK':'FAIL')+' '+item.detail, item.ok?'success':'error');
+        });
+        if (r.success) log('调试结论: 连接正常，可以尝试正式连接','success');
+        else log('调试结论: 连接有问题，请检查上述步骤','error');
+    } catch(e) { log('调试失败: '+e.message,'error'); }
 }
 
 async function checkHealth() {
