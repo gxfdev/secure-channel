@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.4.0'
+APP_VERSION = '2.5.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -58,6 +58,7 @@ _key_files = {'pub': None, 'priv': None, 'dh_priv': None, 'dh_pub': None}
 _negotiate_server_status = {'running': False, 'port': None, 'error': None}
 _negotiate_steps = []
 _negotiate_server_running = False
+_negotiate_server_sock = None
 
 
 def _get_local_ip():
@@ -330,17 +331,26 @@ def test_tcp():
 
 @app.route('/api/set_mode', methods=['POST'])
 def set_mode():
-    global MODE
+    global MODE, _negotiate_server_running, _connection_state, _negotiate_server_thread
     data = request.get_json() or {}
     new_mode = data.get('mode', '')
     if new_mode not in ('sender', 'receiver'):
         return jsonify({'success': False, 'error': '模式必须是 sender 或 receiver'})
     if new_mode == MODE:
         return jsonify({'success': True, 'mode': MODE, 'message': f'已经是{"发送端" if MODE=="sender" else "接收端"}模式'})
+
+    # 重置连接状态
+    _connection_state = {'status': 'disconnected', 'peer_ip': '', 'role': new_mode}
+
     MODE = new_mode
-    if not _negotiate_server_running:
-        start_negotiate_server()
-    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，协商服务器运行中'})
+
+    # 重启协商服务器
+    _negotiate_server_running = False
+    time.sleep(0.3)
+    _negotiate_server_thread = None
+    start_negotiate_server()
+
+    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，协商服务器已重启'})
 
 
 # ==================== Custom Keys API ====================
@@ -936,19 +946,28 @@ def restart_negotiate():
 # ==================== Receiver Negotiation Server ====================
 
 def start_negotiate_server():
-    global _negotiate_server_running, _dh_peer, _connection_state
+    global _negotiate_server_running, _dh_peer, _connection_state, _negotiate_server_sock
 
     if _negotiate_server_running:
         return
 
+    # 关闭旧socket
+    if _negotiate_server_sock:
+        try:
+            _negotiate_server_sock.close()
+        except:
+            pass
+        _negotiate_server_sock = None
+
     def server_thread():
-        global _dh_peer, _connection_state, _negotiate_server_status, _negotiate_server_running, _negotiate_steps
+        global _dh_peer, _connection_state, _negotiate_server_status, _negotiate_server_running, _negotiate_steps, _negotiate_server_sock
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_sock.settimeout(300)
             server_sock.bind(('0.0.0.0', LISTEN_PORT))
             server_sock.listen(5)
+            _negotiate_server_sock = server_sock
             print(f"  [Negotiate Server] Listening on 0.0.0.0:{LISTEN_PORT}")
             _negotiate_server_running = True
             _negotiate_server_status = {'running': True, 'port': LISTEN_PORT, 'error': None}
