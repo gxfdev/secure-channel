@@ -774,12 +774,16 @@ def _handle_data_transfer(conn, req):
         session_key = _dh_peer.get_session_key()
         hmac_key = _dh_peer.get_hmac_key()
 
+        print(f"  [数据传输] 开始接收加密数据...")
+
         # 读取加密数据
         data_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
+        print(f"  [数据传输] 加密数据包长度: {data_len}")
         encrypted_packet = _recv_exact(conn, data_len)
 
         # 读取 RSA 签名
         sig_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
+        print(f"  [数据传输] 签名长度: {sig_len}")
         signature = _recv_exact(conn, sig_len)
 
         # 解析数据包
@@ -797,9 +801,8 @@ def _handle_data_transfer(conn, req):
             decrypted = aes_decrypt(ct, session_key, mode='cbc', iv=recv_iv)
             decrypted_text = decrypted.decode('utf-8')
 
-            # 保存到文件
-            filename = f"received_{int(time.time()*1000)}.json"
-            filepath = os.path.join(DATA_DIR, filename)
+            # 每次接收覆盖写入固定文件（latest_received.json）
+            filepath = os.path.join(DATA_DIR, 'latest_received.json')
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(decrypted_text)
 
@@ -870,10 +873,9 @@ def api_capture():
         if not packets:
             return jsonify({'success': False, 'error': '未抓取到任何数据包', 'capture_log': capture_log})
 
-        # 保存到文件（使用毫秒级时间戳避免文件名冲突）
+        # 每次抓包覆盖写入固定文件（latest_capture.json）
         json_data = packets_to_json(packets)
-        filename = f"capture_{int(time.time()*1000)}.json"
-        filepath = os.path.join(DATA_DIR, filename)
+        filepath = os.path.join(DATA_DIR, 'latest_capture.json')
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(json_data)
 
@@ -883,7 +885,7 @@ def api_capture():
             'count': len(packets),
             'json_data': json_data,
             'saved_to': os.path.abspath(filepath),
-            'filename': filename,
+            'filename': 'latest_capture.json',
             'capture_log': capture_log
         })
     except Exception as e:
@@ -972,6 +974,7 @@ def api_send():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(10)
         try:
+            print(f"  [发送端] 连接 {target_host}:{target_port} 发送加密数据...")
             sock.connect((target_host, target_port))
             # 发送数据传输请求
             req = json.dumps({'type': 'data_transfer'}).encode()
@@ -981,9 +984,11 @@ def api_send():
             # 发送签名
             sock.sendall(struct.pack('>I', len(signature)) + signature)
             send_success = True
+            print(f"  [发送端] 加密数据发送成功! 数据包{len(packet)}字节, 签名{len(signature)}字节")
         except Exception as e:
             send_success = False
             result['error'] = f'发送失败: {e}'
+            print(f"  [发送端] 发送失败: {e}")
         finally:
             sock.close()
 
