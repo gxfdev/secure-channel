@@ -449,13 +449,19 @@ async function doConnect() {
             log('连接成功！5步密钥协商全部完成','success');
         } else {
             var errMsg = r.error || '未知错误';
-            log('连接失败: ' + errMsg, 'error');
-            // 给出具体排查建议
-            if (errMsg.indexOf('超时') >= 0) {
-                log('排查: 1)对方协商服务器是否启动 2)防火墙是否开放'+port+'端口 3)网络是否互通', 'warn');
-            } else if (errMsg.indexOf('拒绝') >= 0) {
-                log('排查: 对方9999端口未监听，请确认接收端容器正常运行，点"重启协商服务器"', 'warn');
-            }
+        log('连接失败: ' + errMsg, 'error');
+        // 显示详细错误堆栈
+        if (r.detail) {
+            log('详细错误: ' + r.detail.substring(0, 200), 'error');
+        }
+        // 给出具体排查建议
+        if (errMsg.indexOf('超时') >= 0 || errMsg.indexOf('timeout') >= 0) {
+            log('排查: 1)对方协商服务器是否启动 2)防火墙是否开放'+port+'端口 3)网络是否互通', 'warn');
+        } else if (errMsg.indexOf('拒绝') >= 0 || errMsg.indexOf('refused') >= 0) {
+            log('排查: 对方9999端口未监听，请确认接收端容器正常运行，点"重启协商服务器"', 'warn');
+        } else if (errMsg.indexOf('断开') >= 0 || errMsg.indexOf('reset') >= 0) {
+            log('排查: 连接被对方重置，可能是对方协商服务器异常，请接收端点"重启协商服务器"', 'warn');
+        }
         }
     } catch(e) { log('请求失败: '+e.message,'error'); }
     finally { btn.disabled=false; btn.textContent='连接'; loadInfo(); }

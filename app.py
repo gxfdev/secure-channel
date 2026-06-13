@@ -253,7 +253,7 @@ def api_connect():
         local_port = random.randint(40000, 60000)
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)
+        sock.settimeout(30)  # 30秒超时，给密钥协商足够时间
 
         # 生成真实的 TCP 参数（模拟实际握手报文）
         seq1 = random.randint(100000000, 999999999)
@@ -343,6 +343,8 @@ def api_connect():
         # ================================================================
         _connection_state['status'] = 'exchanging_rsa_keys'
 
+        print(f"  [发送端-步骤2] 发送RSA公钥给 {target_host}:{target_port}...")
+
         my_rsa_pub = get_rsa_keys()[0]  # (e, n)
 
         # 发送本方 RSA 公钥
@@ -353,11 +355,13 @@ def api_connect():
             'listen_port': LISTEN_PORT
         }).encode()
         sock.sendall(struct.pack('>I', len(step2_send)) + step2_send)
+        print(f"  [发送端-步骤2] RSA公钥已发送，等待对方回复...")
 
         # 接收对方 RSA 公钥
         resp_len = struct.unpack('>I', _recv_exact(sock, 4))[0]
         resp_data = _recv_exact(sock, resp_len)
         peer_step2 = json.loads(resp_data.decode())
+        print(f"  [发送端-步骤2] 收到对方RSA公钥")
 
         peer_rsa_e = peer_step2['rsa_e']
         peer_rsa_n = peer_step2['rsa_n']
@@ -419,11 +423,13 @@ def api_connect():
             'dh_signature': my_signature.hex()
         }).encode()
         sock.sendall(struct.pack('>I', len(step3_send)) + step3_send)
+        print(f"  [发送端-步骤3] DH公钥+签名已发送，等待对方回复...")
 
         # 接收对方签名的 DH 公钥
         resp_len = struct.unpack('>I', _recv_exact(sock, 4))[0]
         resp_data = _recv_exact(sock, resp_len)
         peer_step3 = json.loads(resp_data.decode())
+        print(f"  [发送端-步骤3] 收到对方DH公钥+签名")
 
         peer_dh_public = int(peer_step3['dh_public'], 16)
         peer_dh_signature = bytes.fromhex(peer_step3['dh_signature'])
@@ -587,7 +593,12 @@ def api_connect():
         import traceback
         traceback.print_exc()
         _connection_state['status'] = 'disconnected'
-        return jsonify({'success': False, 'error': str(e)})
+        # 确保关闭socket，防止接收端协商服务器卡死
+        try:
+            sock.close()
+        except:
+            pass
+        return jsonify({'success': False, 'error': f'连接异常: {e}', 'detail': traceback.format_exc()})
 
 
 # ==================== 接收端协商服务 ====================
@@ -836,7 +847,7 @@ def _handle_data_transfer(conn, req):
         })
 
 
-def _recv_exact(sock, n, timeout=15):
+def _recv_exact(sock, n, timeout=30):
     """精确接收 n 字节"""
     sock.settimeout(timeout)
     data = b''
@@ -966,7 +977,7 @@ def api_send():
 
         # 建立新的 TCP 连接发送数据
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)
+        sock.settimeout(30)
         try:
             print(f"  [发送端] 连接 {target_host}:{target_port} 发送加密数据...")
             sock.connect((target_host, target_port))
