@@ -172,16 +172,23 @@ def test_tcp():
             results.append({'step': f'TCP连接 {host}:{port}', 'ok': False, 'detail': str(e)})
             return jsonify({'success': False, 'results': results, 'error': str(e)})
 
-        # 3. 发送协商协议测试
+        # 3. 发送协商协议测试（完整 ping-pong）
         try:
             test_sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             test_sock2.settimeout(5)
             test_sock2.connect((host, port))
-            # 发送一个简单的 ping 消息
+            # 发送 ping
             ping_msg = json.dumps({'type': 'ping'}).encode()
             test_sock2.sendall(struct.pack('>I', len(ping_msg)) + ping_msg)
+            # 读取 pong 响应
+            pong_len = struct.unpack('>I', _recv_exact(test_sock2, 4))[0]
+            pong_data = _recv_exact(test_sock2, pong_len)
+            pong = json.loads(pong_data.decode())
             test_sock2.close()
-            results.append({'step': '协议通信', 'ok': True, 'detail': '协商协议消息已发送'})
+            if pong.get('type') == 'pong':
+                results.append({'step': '协议通信', 'ok': True, 'detail': f"对方模式: {pong.get('mode','?')}, 监听端口: {pong.get('listen_port','?')}"})
+            else:
+                results.append({'step': '协议通信', 'ok': False, 'detail': f"收到异常响应: {pong}"})
         except Exception as e:
             results.append({'step': '协议通信', 'ok': False, 'detail': str(e)})
 
@@ -596,7 +603,7 @@ def start_negotiate_server():
         return
 
     def server_thread():
-        global _dh_peer, _connection_state, _negotiate_server_status
+        global _dh_peer, _connection_state, _negotiate_server_status, _negotiate_server_running
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -609,11 +616,14 @@ def start_negotiate_server():
         except Exception as e:
             print(f"  [协商服务器] 启动失败: {e}")
             _negotiate_server_status = {'running': False, 'port': LISTEN_PORT, 'error': str(e)}
+            _negotiate_server_running = False
             return
 
         while True:
+            conn = None
             try:
                 conn, addr = server_sock.accept()
+                conn.settimeout(30)  # 关键：给每个连接设置30秒超时，防止卡死
                 print(f"  [协商服务器] 收到来自 {addr} 的连接")
 
                 # 先保存之前的状态，ping 不改变状态
@@ -631,8 +641,11 @@ def start_negotiate_server():
 
                 if req.get('type') == 'ping':
                     # 连通性测试，直接回复 pong，不改变连接状态
-                    pong = json.dumps({'type': 'pong', 'mode': MODE, 'listen_port': LISTEN_PORT}).encode()
-                    conn.sendall(struct.pack('>I', len(pong)) + pong)
+                    try:
+                        pong = json.dumps({'type': 'pong', 'mode': MODE, 'listen_port': LISTEN_PORT}).encode()
+                        conn.sendall(struct.pack('>I', len(pong)) + pong)
+                    except:
+                        pass  # 发送端可能已关闭，忽略
                     conn.close()
                     # 恢复之前的状态
                     _connection_state['status'] = prev_status
@@ -647,10 +660,10 @@ def start_negotiate_server():
 
                 # 只有真正的密钥协商才设置状态
                 _connection_state['status'] = 'negotiating'
+                print(f"  [协商服务器] 开始密钥协商流程...")
 
                 if req.get('type') == 'step2_rsa_pub_exchange':
                     # ========== 步骤2: 接收端处理 RSA 公钥交换 ==========
-                    # 收到对方的 RSA 公钥，保存并返回自己的 RSA 公钥
                     peer_rsa_e = req['rsa_e']
                     peer_rsa_n = req['rsa_n']
                     peer_listen_port = req.get('listen_port', LISTEN_PORT)
@@ -661,12 +674,7 @@ def start_negotiate_server():
                     _connection_state['peer_listen_port'] = peer_listen_port
 
                     my_rsa_pub = get_rsa_keys()[0]
-
-                    print(f"\n{'='*60}")
-                    print(f"  [接收端-步骤2] 收到对方RSA公钥")
-                    print(f"    对方RSA: e={peer_rsa_e}, n={str(peer_rsa_n)[:32]}...({peer_rsa_n.bit_length()}位)")
-                    print(f"    返回我的RSA公钥: e={my_rsa_pub[0]}, n={str(my_rsa_pub[1])[:32]}...({my_rsa_pub[1].bit_length()}位)")
-                    print(f"{'='*60}\n")
+                    print(f"  [接收端-步骤2] RSA公钥交换完成")
 
                     # 返回自己的 RSA 公钥
                     step2_resp = json.dumps({
@@ -683,6 +691,7 @@ def start_negotiate_server():
                     step3_req = json.loads(resp_data.decode())
 
                     if step3_req.get('type') != 'step3_dh_key_exchange':
+                        print(f"  [协商服务器] 收到未知请求类型: {step3_req.get('type')}, 忽略")
                         conn.close()
                         continue
 
@@ -690,23 +699,14 @@ def start_negotiate_server():
                     peer_dh_public = int(step3_req['dh_public'], 16)
                     peer_dh_signature = bytes.fromhex(step3_req['dh_signature'])
 
-                    # 生成自己的 DH 密钥对
                     _dh_peer = DHPeer(bits=256)
                     my_dh_public = _dh_peer.get_public_key()
 
-                    # 用私钥签名 DH 公钥
                     my_dh_public_bytes = my_dh_public.to_bytes((my_dh_public.bit_length() + 7) // 8, 'big')
                     my_signature = rsa_sign(my_dh_public_bytes, get_rsa_keys()[1])
 
-                    print(f"{'='*60}")
-                    print(f"  [接收端-步骤3] DH 公钥交换")
-                    print(f"    收到对方DH公钥: {hex(peer_dh_public)}")
-                    print(f"    对方DH签名:     {peer_dh_signature.hex()[:48]}...")
-                    print(f"    我的DH公钥:      {hex(my_dh_public)}")
-                    print(f"    我的DH签名:      {my_signature.hex()[:48]}...")
-                    print(f"{'='*60}\n")
+                    print(f"  [接收端-步骤3] DH公钥交换完成")
 
-                    # 发送签名的 DH 公钥给对方
                     step3_resp = json.dumps({
                         'type': 'step3_dh_key_exchange',
                         'dh_public': hex(my_dh_public),
@@ -716,21 +716,10 @@ def start_negotiate_server():
 
                     # ========== 步骤4: 验证对方签名 ==========
                     peer_dh_public_bytes = peer_dh_public.to_bytes((peer_dh_public.bit_length() + 7) // 8, 'big')
-
-                    from sha256 import sha256 as _sha256_rec
-                    actual_hash_rec = int.from_bytes(_sha256_rec(peer_dh_public_bytes), 'big')
-                    recovered_hash_rec = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
-                    sig_match_rec = (actual_hash_rec == recovered_hash_rec)
-
-                    print(f"{'='*60}")
-                    print(f"  [接收端-步骤4] 验证对方签名...")
-                    print(f"    实际哈希值:   {hex(actual_hash_rec)}")
-                    print(f"    恢复的哈希值: {hex(recovered_hash_rec)}")
-                    print(f"    匹配结果: {'✓ 通过' if sig_match_rec else '✗ 失败'}")
-                    print(f"{'='*60}\n")
-
                     peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
                     _connection_state['peer_verified'] = peer_verified
+
+                    print(f"  [接收端-步骤4] 签名验证: {'通过' if peer_verified else '失败'}")
 
                     if peer_verified:
                         # ========== 步骤5: 计算共享会话密钥 ==========
@@ -742,25 +731,30 @@ def start_negotiate_server():
                         _connection_state['hmac_key'] = hmac_key.hex()
                         _connection_state['status'] = 'connected'
 
-                        print(f"{'='*60}")
-                        print(f"  [接收端-步骤5] 会话密钥生成完成 ✓")
-                        print(f"    AES会话密钥: {session_key.hex()}")
-                        print(f"    HMAC密钥:    {hmac_key.hex()}")
-                        print(f"{'='*60}\n")
+                        print(f"  [接收端-步骤5] 会话密钥生成完成 ✓ 连接已建立!")
                     else:
                         _connection_state['status'] = 'disconnected'
-                        print(f"  [接收端] 对方签名验证失败！")
+                        print(f"  [接收端] 签名验证失败，连接拒绝")
 
                 conn.close()
 
             except socket.timeout:
+                # accept 超时，继续等待
+                continue
+            except ConnectionError as e:
+                print(f"  [协商服务器] 连接断开: {e}")
+                if conn:
+                    try: conn.close()
+                    except: pass
+                # 连接断开不改变状态，继续等待新连接
                 continue
             except Exception as e:
-                print(f"  [协商服务器] 错误: {e}")
-                try:
-                    conn.close()
-                except:
-                    pass
+                print(f"  [协商服务器] 处理错误: {e}")
+                import traceback
+                traceback.print_exc()
+                if conn:
+                    try: conn.close()
+                    except: pass
                 continue
 
     thread = threading.Thread(target=server_thread, daemon=True)
@@ -1112,11 +1106,12 @@ def test_algorithms():
 def restart_negotiate():
     """重启协商服务器（如果崩溃或端口异常时使用）"""
     global _negotiate_server_running, _negotiate_server_status
+    # 强制重置状态，允许重新启动
     _negotiate_server_running = False
     _negotiate_server_status = {'running': False, 'port': LISTEN_PORT, 'error': None}
+    time.sleep(0.3)  # 等旧线程退出
     start_negotiate_server()
-    # 等待一小段时间让服务器启动
-    time.sleep(0.5)
+    time.sleep(0.5)  # 等新服务器启动
     return jsonify({
         'success': True,
         'negotiate_server': _negotiate_server_status,

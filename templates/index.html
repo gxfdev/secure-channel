@@ -439,6 +439,7 @@ async function doConnect() {
     var btn = document.getElementById('btnConnect');
     btn.disabled = true; btn.textContent = '连接中...';
     log('正在连接 '+host+':'+port+' ...','info');
+    log('提示: 连接的是对方容器的9999端口(协商端口)，不是5001(Web端口)','info');
     try {
         var resp = await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
         var r = await resp.json();
@@ -447,7 +448,14 @@ async function doConnect() {
         if (r.success) {
             log('连接成功！5步密钥协商全部完成','success');
         } else {
-            log('连接失败: '+(r.error||'未知错误'),'error');
+            var errMsg = r.error || '未知错误';
+            log('连接失败: ' + errMsg, 'error');
+            // 给出具体排查建议
+            if (errMsg.indexOf('超时') >= 0) {
+                log('排查: 1)对方协商服务器是否启动 2)防火墙是否开放'+port+'端口 3)网络是否互通', 'warn');
+            } else if (errMsg.indexOf('拒绝') >= 0) {
+                log('排查: 对方9999端口未监听，请确认接收端容器正常运行，点"重启协商服务器"', 'warn');
+            }
         }
     } catch(e) { log('请求失败: '+e.message,'error'); }
     finally { btn.disabled=false; btn.textContent='连接'; loadInfo(); }
