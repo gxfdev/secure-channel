@@ -148,6 +148,7 @@
                     </div>
                 </div>
                 <button class="btn btn-sm" style="background:#f59e0b;color:#000" onclick="setRsaKeys()">根据 p, q 生成 RSA 密钥</button>
+                <div id="rsaCorrectionBox" style="display:none;margin-top:8px;padding:8px;background:#7f1d1d;border:1px solid #f87171;border-radius:6px;font-size:12px;color:#fca5a5"></div>
             </div>
 
             <div class="mb4">
@@ -866,12 +867,21 @@ async function setRsaKeys() {
         var r = await resp.json();
         if (r.success) {
             el.textContent = 'RSA密钥已生成'; el.style.color = '#4ade80';
-            // 显示纠正信息
+            // 显示纠正信息（醒目红色警告框）
+            var corrBox = document.getElementById('rsaCorrectionBox');
             if (r.corrections && r.corrections.length > 0) {
+                var corrHtml = '<div style="font-weight:bold;margin-bottom:4px;color:#f87171">⚠ 输入值不符合要求，已自动纠正：</div>';
+                for (var i = 0; i < r.corrections.length; i++) {
+                    corrHtml += '<div style="margin-left:8px">→ ' + esc(r.corrections[i]) + '</div>';
+                }
+                corrBox.innerHTML = corrHtml;
+                corrBox.style.display = 'block';
                 log('⚠ 输入值已自动纠正:', 'warn');
                 for (var i = 0; i < r.corrections.length; i++) {
                     log('  → ' + r.corrections[i], 'warn');
                 }
+            } else {
+                corrBox.style.display = 'none';
             }
             log('RSA密钥已根据 p,q 生成:', 'success');
             if (r.calculation) {
