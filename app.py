@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.6.0'
+APP_VERSION = '2.7.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -930,17 +930,30 @@ def reset_connection():
     _reset_connection_state()
     global _negotiate_steps
     _negotiate_steps = []
-    return jsonify({'success': True, 'message': '连接已断开'})
+    return jsonify({'success': True, 'message': '连接已断开', 'status': _connection_state['status']})
 
 
 @app.route('/api/restart_negotiate', methods=['POST'])
 def restart_negotiate():
-    global _negotiate_server_running, _negotiate_server_status
+    global _negotiate_server_running, _negotiate_server_status, _negotiate_server_sock, _negotiate_steps, _connection_state
+    # 重置连接状态和协商步骤
+    _reset_connection_state()
+    _negotiate_steps = []
+    _connection_state['status'] = 'disconnected'
+
+    # 关闭旧socket让旧线程退出
+    if _negotiate_server_sock:
+        try:
+            _negotiate_server_sock.close()
+        except:
+            pass
+        _negotiate_server_sock = None
+
     _negotiate_server_running = False
     _negotiate_server_status = {'running': False, 'port': None, 'error': None}
     time.sleep(0.5)
     start_negotiate_server()
-    return jsonify({'success': True, 'negotiate_server': _negotiate_server_status})
+    return jsonify({'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']})
 
 
 # ==================== Receiver Negotiation Server ====================
@@ -977,7 +990,7 @@ def start_negotiate_server():
             _negotiate_server_running = False
             return
 
-        while True:
+        while _negotiate_server_running:
             conn = None
             try:
                 conn, addr = server_sock.accept()
@@ -1191,9 +1204,15 @@ def start_negotiate_server():
                 conn.close()
 
             except socket.timeout:
+                # 超时时如果状态卡在协商中，重置为未连接
+                if _connection_state['status'] not in ('connected', 'disconnected'):
+                    _connection_state['status'] = 'disconnected'
                 continue
             except ConnectionError as e:
                 print(f"  [Negotiate Server] Connection error: {e}")
+                # 连接错误时重置状态
+                if _connection_state['status'] not in ('connected', 'disconnected'):
+                    _connection_state['status'] = 'disconnected'
                 if conn:
                     try: conn.close()
                     except: pass
@@ -1202,6 +1221,9 @@ def start_negotiate_server():
                 print(f"  [Negotiate Server] Error: {e}")
                 import traceback
                 traceback.print_exc()
+                # 异常时重置状态
+                if _connection_state['status'] not in ('connected', 'disconnected'):
+                    _connection_state['status'] = 'disconnected'
                 if conn:
                     try: conn.close()
                     except: pass

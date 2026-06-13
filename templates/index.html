@@ -888,7 +888,13 @@ async function restartNegotiate() {
     try {
         var resp = await fetch('/api/restart_negotiate',{method:'POST'});
         var r = await resp.json();
-        if (r.success) { log('协商服务器已重启: '+JSON.stringify(r.negotiate_server),'success'); }
+        if (r.success) {
+            log('协商服务器已重启，状态已重置','success');
+            // 立即更新UI
+            updateConnUI({status: 'disconnected', peer_ip: '', negotiate_steps: []});
+            var el = document.getElementById('recvNegotiateSteps');
+            if (el) el.innerHTML = '<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">等待发送端连接后显示协商过程...</div>';
+        }
         else { log('重启失败: '+(r.error||''),'error'); }
         refreshConn();
     } catch(e) { log('重启失败: '+e.message,'error'); }
@@ -900,6 +906,10 @@ async function resetConnection() {
         var resp = await fetch('/api/reset_connection',{method:'POST'});
         var r = await resp.json();
         log(r.message,'success');
+        // 立即更新UI
+        updateConnUI({status: 'disconnected', peer_ip: '', negotiate_steps: []});
+        var el = document.getElementById('recvNegotiateSteps');
+        if (el) el.innerHTML = '<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">等待发送端连接后显示协商过程...</div>';
         refreshConn();
         loadInfo();
     } catch(e) { log('断开失败: '+e.message,'error'); }
