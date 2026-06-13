@@ -213,15 +213,26 @@
                 <!-- 2. 抓包 -->
                 <div class="mb4">
                     <div class="text-sm font-bold mb2">2. 抓取网络数据包</div>
-                    <div class="flex gap2 mb2">
-                        <input id="captureCount" class="input" style="width:80px" placeholder="数量" value="5">
-                        <select id="captureFilter" class="input" style="width:200px">
+                    <div class="text-xs text-slate400 mb2" style="line-height:1.6">
+                        抓包原理：使用 <b>scapy</b> 库将网卡设为<b>混杂模式</b>，直接从网卡读取原始数据帧，解析以太网头、IP头、TCP/UDP头和载荷。<br>
+                        BPF过滤器：内核级过滤，只捕获符合规则的数据包，减少无关流量。<br>
+                        常用规则：<code>ip</code>(所有IP包)、<code>tcp</code>(仅TCP)、<code>host 192.168.1.1</code>(指定IP)、<code>tcp and host 10.0.0.1</code>(组合)
+                    </div>
+                    <div class="flex gap2 mb2 flex-wrap">
+                        <input id="captureCount" class="input" style="width:70px" placeholder="数量" value="5">
+                        <select id="captureFilter" class="input" style="width:220px">
                             <option value="ip">所有IP流量</option>
                             <option value="tcp">仅TCP流量</option>
+                            <option value="udp">仅UDP流量</option>
+                            <option value="icmp">仅ICMP流量</option>
+                            <option value="tcp and not port 5000">TCP(排除Web端口)</option>
                             <option value="tcp port 9999">仅协商端口(9999)</option>
                             <option value="tcp port 5000">仅Web端口(5000)</option>
                             <option value="tcp port 9999 or tcp port 5000">协商+Web端口</option>
+                            <option value="custom">自定义BPF过滤器...</option>
                         </select>
+                        <input id="captureCustomFilter" class="input hidden" style="width:260px" placeholder="如: host 192.168.1.1 and tcp">
+                        <button id="btnCapturePeer" class="btn btn-sm" style="background:#7c3aed;color:#fff" onclick="capturePeer()">抓取对方IP</button>
                         <button id="btnCapture" class="btn btn-orange" onclick="doCapture()">抓取数据包</button>
                     </div>
                     <div id="captureResult" class="hidden"></div>
@@ -607,6 +618,9 @@ async function doCapture() {
     var count = parseInt(document.getElementById('captureCount').value)||5;
     var filterEl = document.getElementById('captureFilter');
     var filter = filterEl ? filterEl.value : 'ip';
+    if (filter === 'custom') {
+        filter = document.getElementById('captureCustomFilter').value.trim() || 'ip';
+    }
     var btn = document.getElementById('btnCapture');
     btn.disabled=true; btn.textContent='抓取中...';
     log('开始抓取 '+count+' 个数据包 (过滤器: '+filter+')...','info');
@@ -623,6 +637,42 @@ async function doCapture() {
     } catch(e) { log('请求失败: '+e.message,'error'); }
     finally { btn.disabled=false; btn.textContent='抓取数据包'; }
 }
+
+// 抓取对方IP的数据包（自动根据当前连接状态生成BPF过滤器）
+async function capturePeer() {
+    var peerIP = '';
+    // 从连接状态获取对方IP
+    if (sysInfo && sysInfo.connection && sysInfo.connection.peer_ip) {
+        peerIP = sysInfo.connection.peer_ip;
+    }
+    // 发送端也可以从输入框获取
+    if (!peerIP) {
+        var hostInput = document.getElementById('targetHost');
+        if (hostInput && hostInput.value.trim()) {
+            peerIP = hostInput.value.trim();
+        }
+    }
+    if (!peerIP) {
+        log('无法确定对方IP，请先连接或手动输入对方IP','warn');
+        return;
+    }
+    // 设置过滤器为对方IP
+    var filterEl = document.getElementById('captureFilter');
+    filterEl.value = 'custom';
+    document.getElementById('captureCustomFilter').classList.remove('hidden');
+    document.getElementById('captureCustomFilter').value = 'host ' + peerIP;
+    log('已设置过滤器: host '+peerIP+'，开始抓取...','info');
+    await doCapture();
+}
+
+// 自定义过滤器切换
+document.getElementById('captureFilter').addEventListener('change', function() {
+    if (this.value === 'custom') {
+        document.getElementById('captureCustomFilter').classList.remove('hidden');
+    } else {
+        document.getElementById('captureCustomFilter').classList.add('hidden');
+    }
+});
 
 function renderCapture(r) {
     var html = '';
