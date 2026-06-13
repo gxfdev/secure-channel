@@ -692,12 +692,31 @@ async function checkHealth() {
         var resp = await fetch('/api/health');
         var r = await resp.json();
         if (r.port_listening) {
-            el.textContent = '本机服务正常 (端口'+r.listen_port+')'; el.style.color = '#4ade80';
+            el.textContent = '本机服务正常'; el.style.color = '#4ade80';
             log('协商服务器在端口'+r.listen_port+'正常监听','success');
         } else {
             el.textContent = '协商服务器未运行!'; el.style.color = '#f87171';
-            log('协商服务器未运行!','error');
+            log('协商服务器未运行! 请点"重启协商服务器"','error');
         }
+        // 显示网络诊断信息
+        if (r.network_debug) {
+            var nd = r.network_debug;
+            log('本机IP: '+(nd.outbound_ip||nd.ip||'未知'), 'info');
+            if (nd.scapy_ifaces) {
+                nd.scapy_ifaces.forEach(function(iface) {
+                    log('网卡: '+iface.name+' IP: '+iface.ip, 'info');
+                });
+            }
+        }
+        // 抓包诊断
+        try {
+            var resp2 = await fetch('/api/capture_diag');
+            var cd = await resp2.json();
+            log('Scapy: '+(cd.scapy_available?'可用':'不可用'), cd.scapy_available?'success':'error');
+            log('自动选择网卡: '+(cd.auto_selected_iface||'无'), 'info');
+            if (cd.sniff_test) log('抓包测试: '+cd.sniff_test, cd.sniff_test.indexOf('OK')>=0?'success':'error');
+            if (cd.issues && cd.issues.length > 0) cd.issues.forEach(function(issue) { log('问题: '+issue, 'error'); });
+        } catch(e) { log('抓包诊断失败: '+e.message, 'error'); }
     } catch(e) { el.textContent = '检查失败'; el.style.color = '#f87171'; log('检查失败: '+e.message,'error'); }
 }
 

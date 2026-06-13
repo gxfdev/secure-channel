@@ -157,6 +157,8 @@ def health_check():
         'negotiate_server': _negotiate_server_status,
         'listen_port': LISTEN_PORT,
         'port_listening': False,
+        'scapy_available': HAS_SCAPY,
+        'network_debug': {},
     }
     # 检查端口是否在监听
     try:
@@ -167,6 +169,41 @@ def health_check():
         result['port_listening'] = True
     except:
         result['port_listening'] = False
+
+    # 网络诊断信息
+    try:
+        result['network_debug']['hostname'] = socket.gethostname()
+        try:
+            result['network_debug']['ip'] = socket.gethostbyname(socket.gethostname())
+        except:
+            result['network_debug']['ip'] = 'DNS失败'
+        # 获取所有网卡IP
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            result['network_debug']['outbound_ip'] = s.getsockname()[0]
+            s.close()
+        except:
+            result['network_debug']['outbound_ip'] = '无法获取'
+    except:
+        pass
+
+    # scapy 接口信息
+    if HAS_SCAPY:
+        try:
+            from scapy.all import get_if_list, get_if_addr, conf
+            ifaces = []
+            for iface in get_if_list():
+                try:
+                    ip = get_if_addr(str(iface))
+                    ifaces.append({'name': str(iface), 'ip': ip})
+                except:
+                    ifaces.append({'name': str(iface), 'ip': 'N/A'})
+            result['network_debug']['scapy_ifaces'] = ifaces
+            result['network_debug']['scapy_default_iface'] = str(conf.iface)
+        except Exception as e:
+            result['network_debug']['scapy_error'] = str(e)
+
     return jsonify(result)
 
 
@@ -961,6 +998,61 @@ def _recv_exact(sock, n, timeout=30):
 
 # ==================== 抓包 API ====================
 
+@app.route('/api/capture_diag', methods=['GET'])
+def capture_diag():
+    """抓包诊断：检查scapy状态、网卡接口等"""
+    result = {'scapy_available': HAS_SCAPY, 'issues': [], 'ifaces': []}
+    if not HAS_SCAPY:
+        result['issues'].append('scapy未安装')
+        return jsonify(result)
+
+    try:
+        from scapy.all import get_if_list, get_if_addr, conf, IFACES
+
+        # 检查scapy接口列表
+        result['scapy_conf_iface'] = str(conf.iface)
+        result['scapy_ifaces_detail'] = {}
+
+        for iface_name in get_if_list():
+            try:
+                ip = get_if_addr(str(iface_name))
+                result['ifaces'].append({'name': str(iface_name), 'ip': ip})
+            except:
+                result['ifaces'].append({'name': str(iface_name), 'ip': 'ERROR'})
+
+        # 检查IFACES对象
+        try:
+            for k, v in IFACES.items():
+                result['scapy_ifaces_detail'][str(k)] = {'name': str(v.name) if hasattr(v, 'name') else str(k), 'ip': str(v.ip) if hasattr(v, 'ip') else 'N/A'}
+        except:
+            pass
+
+        # 自动选择接口测试
+        from capture import _auto_select_interface
+        selected = _auto_select_interface()
+        result['auto_selected_iface'] = selected
+
+        if not selected:
+            result['issues'].append('无法自动选择网卡接口')
+
+        # 尝试抓1个包测试
+        try:
+            from scapy.all import sniff
+            test_kwargs = {'count': 1, 'timeout': 3, 'store': False}
+            if selected:
+                test_kwargs['iface'] = selected
+            sniff(**test_kwargs)
+            result['sniff_test'] = 'OK - scapy可以抓包'
+        except Exception as e:
+            result['sniff_test'] = f'FAIL - {e}'
+            result['issues'].append(f'scapy sniff测试失败: {e}')
+
+    except Exception as e:
+        result['issues'].append(f'诊断异常: {e}')
+
+    return jsonify(result)
+
+
 @app.route('/api/capture', methods=['POST'])
 def api_capture():
     """抓取网络数据包（详细版，包含抓包过程日志）"""
@@ -971,12 +1063,16 @@ def api_capture():
         filter_rule = request.json.get('filter', 'ip') if request.is_json else 'ip'
         interface = request.json.get('interface', None) if request.is_json else None
 
+        print(f"  [抓包] 开始: count={count}, timeout={timeout}, filter={filter_rule}, interface={interface}")
+
         packets, capture_log = capture_packets(count=count, timeout=timeout,
                                                 interface=interface,
                                                 filter_rule=filter_rule)
 
+        print(f"  [抓包] 完成: 抓到 {len(packets)} 个包")
+
         if not packets:
-            return jsonify({'success': False, 'error': '未抓取到任何数据包', 'capture_log': capture_log})
+            return jsonify({'success': False, 'error': '未抓取到任何数据包（可能网络无流量或过滤器太严格）', 'capture_log': capture_log})
 
         # 每次抓包覆盖写入固定文件（latest_capture.json）
         json_data = packets_to_json(packets)
@@ -994,7 +1090,9 @@ def api_capture():
             'capture_log': capture_log
         })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e), 'detail': traceback.format_exc()})
 
 
 # ==================== 加密发送 API ====================
