@@ -113,7 +113,7 @@
                 <div><span class="text-slate500">IP:</span> <span id="infoIP">-</span></div>
                 <div><span class="text-slate500">协商端口:</span> <span id="infoPort">-</span></div>
                 <div><span class="text-slate500">RSA:</span> <span id="infoRSA">-</span></div>
-                <div><span class="text-slate500">Scapy:</span> <span id="infoScapy">-</span></div>
+                <div><span class="text-slate500">抓包:</span> <span id="infoScapy">-</span></div>
             </div>
         </div>
 
@@ -132,21 +132,22 @@
 
             <div class="mb4">
                 <div class="text-sm font-bold mb2" style="color:#fbbf24">RSA 密钥</div>
+                <div class="text-xs text-slate400 mb2" style="background:#1e293b;padding:6px 8px;border-radius:4px">RSA原理：选两个素数 p, q → n = p×q → φ(n) = (p-1)(q-1) → d = e⁻¹ mod φ(n)</div>
                 <div class="flex gap2 mb2">
                     <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">e (公钥指数)</div>
-                        <input id="customRsaE" class="input" placeholder="如 65537" style="font-size:12px">
+                        <div class="text-xs text-slate500 mb1">p (素数，十进制)</div>
+                        <input id="customRsaP" class="input" placeholder="大素数" style="font-size:12px">
                     </div>
                     <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">n (模数，十进制)</div>
-                        <input id="customRsaN" class="input" placeholder="大整数，十进制" style="font-size:12px">
+                        <div class="text-xs text-slate500 mb1">q (素数，十进制)</div>
+                        <input id="customRsaQ" class="input" placeholder="大素数" style="font-size:12px">
                     </div>
                     <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">d (私钥指数，十进制)</div>
-                        <input id="customRsaD" class="input" placeholder="大整数，十进制" style="font-size:12px">
+                        <div class="text-xs text-slate500 mb1">e (公钥指数，可选)</div>
+                        <input id="customRsaE" class="input" placeholder="默认 65537" style="font-size:12px">
                     </div>
                 </div>
-                <button class="btn btn-sm" style="background:#f59e0b;color:#000" onclick="setRsaKeys()">设置 RSA 密钥</button>
+                <button class="btn btn-sm" style="background:#f59e0b;color:#000" onclick="setRsaKeys()">根据 p, q 生成 RSA 密钥</button>
             </div>
 
             <div class="mb4">
@@ -405,6 +406,8 @@ function renderKeyData(info) {
         html += '<div style="color:#f59e0b;font-weight:700;margin-bottom:6px">DH 密钥协商</div>';
         html += '<div class="data-row"><span class="data-key">DH私钥</span><span class="data-val font-mono" style="color:#fbbf24;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.private_key.substring(0,60))+'...</span></div>';
         html += '<div class="data-row"><span class="data-key">DH公钥</span><span class="data-val font-mono" style="color:#4ade80;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.public_key.substring(0,60))+'...</span></div>';
+        if (ki.dh.private_key_file) html += '<div class="data-row"><span class="data-key">DH私钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.dh.private_key_file)+'</span></div>';
+        if (ki.dh.public_key_file) html += '<div class="data-row"><span class="data-key">DH公钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.dh.public_key_file)+'</span></div>';
         if (ki.dh.shared_secret) html += '<div class="data-row"><span class="data-key">共享秘密</span><span class="data-val font-mono" style="color:#a78bfa;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.shared_secret.substring(0,60))+'...</span></div>';
         html += '</div>';
     }
@@ -643,7 +646,7 @@ function renderCapture(r) {
         if (p.src_ip) html += '<div style="color:#60a5fa;font-weight:600;margin:6px 0 4px">IP层</div><div class="data-row"><span class="data-key">源IP</span><span class="data-val">'+esc(p.src_ip)+'</span></div><div class="data-row"><span class="data-key">目标IP</span><span class="data-val">'+esc(p.dst_ip)+'</span></div><div class="data-row"><span class="data-key">TTL</span><span class="data-val">'+p.ttl+'</span></div>';
         if (p.protocol==='TCP') html += '<div style="color:#4ade80;font-weight:600;margin:6px 0 4px">TCP层</div><div class="data-row"><span class="data-key">源端口</span><span class="data-val">'+esc(p.src_port)+'</span></div><div class="data-row"><span class="data-key">目标端口</span><span class="data-val">'+esc(p.dst_port)+'</span></div><div class="data-row"><span class="data-key">标志位</span><span class="data-val" style="color:#fbbf24">'+esc(p.tcp_flags)+'</span></div><div class="data-row"><span class="data-key">序列号</span><span class="data-val">'+p.seq_num+'</span></div><div class="data-row"><span class="data-key">确认号</span><span class="data-val">'+p.ack_num+'</span></div><div class="data-row"><span class="data-key">窗口大小</span><span class="data-val">'+p.window_size+'</span></div>';
         if (p.protocol==='UDP') html += '<div style="color:#4ade80;font-weight:600;margin:6px 0 4px">UDP层</div><div class="data-row"><span class="data-key">源端口</span><span class="data-val">'+esc(p.src_port)+'</span></div><div class="data-row"><span class="data-key">目标端口</span><span class="data-val">'+esc(p.dst_port)+'</span></div>';
-        if (p.payload_length>0) html += '<div style="color:#f87171;font-weight:600;margin:6px 0 4px">载荷 ('+p.payload_length+'字节)</div><div class="data-row"><span class="data-key">Hex</span><span class="data-val" style="font-size:10px;max-height:60px;overflow:hidden">'+esc(p.payload_hex.substring(0,200))+'...</span></div>';
+        if (p.payload_length>0) html += '<div style="color:#f87171;font-weight:600;margin:6px 0 4px">载荷 ('+p.payload_length+'字节)</div><div class="data-row"><span class="data-key">十六进制</span><span class="data-val" style="font-size:10px;max-height:60px;overflow:hidden">'+esc(p.payload_hex.substring(0,200))+'...</span></div>';
         html += '</div></div>';
     });
     document.getElementById('captureResult').innerHTML = html;
@@ -747,8 +750,8 @@ async function testAlgo() {
         var el = document.getElementById('algoResult');
         var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
         for (var name in r) {
-            var pass = r[name]==='PASS';
-            html += '<div class="step-card" style="text-align:center"><div class="font-bold '+(pass?'text-green400':'text-red400')+'">'+esc(name)+'</div><div class="'+(pass?'text-green400':'text-red400')+'">'+(pass?'PASS':esc(r[name]))+'</div></div>';
+            var pass = r[name]==='通过';
+            html += '<div class="step-card" style="text-align:center"><div class="font-bold '+(pass?'text-green400':'text-red400')+'">'+esc(name)+'</div><div class="'+(pass?'text-green400':'text-red400')+'">'+(pass?'通过':esc(r[name]))+'</div></div>';
         }
         html += '</div>';
         el.innerHTML = html;
@@ -772,7 +775,7 @@ async function testTcp() {
             el.textContent = r.error||'失败'; el.style.color = '#f87171';
             log('TCP测试失败: '+(r.error||''),'error');
         }
-        if (r.results) r.results.forEach(function(item) { log('  '+item.step+': '+(item.ok?'OK':'FAIL')+' '+item.detail, item.ok?'success':'error'); });
+        if (r.results) r.results.forEach(function(item) { log('  '+item.step+': '+(item.ok?'通过':'失败')+' '+item.detail, item.ok?'success':'error'); });
     } catch(e) { el.textContent = '失败'; el.style.color = '#f87171'; log('测试失败: '+e.message,'error'); }
 }
 
@@ -785,7 +788,7 @@ async function debugConnect() {
         var resp = await fetch('/api/debug_connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
         var r = await resp.json();
         (r.results||[]).forEach(function(item) {
-            log('  '+item.step+': '+(item.ok?'OK':'FAIL')+' '+item.detail, item.ok?'success':'error');
+            log('  '+item.step+': '+(item.ok?'通过':'失败')+' '+item.detail, item.ok?'success':'error');
         });
         if (r.success) log('调试结论: 连接正常，可以尝试正式连接','success');
         else log('调试结论: 连接有问题，请检查上述步骤','error');
@@ -819,9 +822,9 @@ async function checkHealth() {
         try {
             var resp2 = await fetch('/api/capture_diag');
             var cd = await resp2.json();
-            log('Scapy: '+(cd.scapy_available?'可用':'不可用'), cd.scapy_available?'success':'error');
+            log('抓包库: '+(cd.scapy_available?'可用':'不可用'), cd.scapy_available?'success':'error');
             log('自动选择网卡: '+(cd.auto_selected_iface||'无'), 'info');
-            if (cd.sniff_test) log('抓包测试: '+cd.sniff_test, cd.sniff_test.indexOf('OK')>=0?'success':'error');
+            if (cd.sniff_test) log('抓包测试: '+cd.sniff_test, cd.sniff_test.indexOf('成功')>=0||cd.sniff_test.indexOf('OK')>=0?'success':'error');
             if (cd.issues && cd.issues.length > 0) cd.issues.forEach(function(issue) { log('问题: '+issue, 'error'); });
         } catch(e) { log('抓包诊断失败: '+e.message, 'error'); }
     } catch(e) { el.textContent = '检查失败'; el.style.color = '#f87171'; log('检查失败: '+e.message,'error'); }
@@ -850,18 +853,35 @@ async function resetConnection() {
 }
 
 async function setRsaKeys() {
+    var p = document.getElementById('customRsaP').value.trim();
+    var q = document.getElementById('customRsaQ').value.trim();
     var e = document.getElementById('customRsaE').value.trim();
-    var n = document.getElementById('customRsaN').value.trim();
-    var d = document.getElementById('customRsaD').value.trim();
-    if (!e || !n || !d) { log('请填写RSA的e、n、d三个值','warn'); return; }
+    if (!p || !q) { log('请填写素数 p 和 q','warn'); return; }
+    var body = {p: p, q: q};
+    if (e) body.e = e;
     var el = document.getElementById('customKeyResult');
-    el.textContent = '设置中...'; el.style.color = '#fbbf24';
+    el.textContent = '计算中...'; el.style.color = '#fbbf24';
     try {
-        var resp = await fetch('/api/set_rsa_keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({e:e,n:n,d:d})});
+        var resp = await fetch('/api/set_rsa_keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         var r = await resp.json();
         if (r.success) {
-            el.textContent = 'RSA密钥已更新'; el.style.color = '#4ade80';
-            log('RSA密钥已更新: e='+r.public_key.e+', n_bits='+r.public_key.n_bits+', d_bits='+r.private_key.d_bits, 'success');
+            el.textContent = 'RSA密钥已生成'; el.style.color = '#4ade80';
+            // 显示纠正信息
+            if (r.corrections && r.corrections.length > 0) {
+                log('⚠ 输入值已自动纠正:', 'warn');
+                for (var i = 0; i < r.corrections.length; i++) {
+                    log('  → ' + r.corrections[i], 'warn');
+                }
+            }
+            log('RSA密钥已根据 p,q 生成:', 'success');
+            if (r.calculation) {
+                log('  p = '+r.calculation['p'], 'info');
+                log('  q = '+r.calculation['q'], 'info');
+                log('  n = p×q = '+r.calculation['n = p × q'], 'info');
+                log('  φ(n) = (p-1)(q-1) = '+r.calculation['φ(n) = (p-1)(q-1)'], 'info');
+                log('  e = '+r.calculation['e'], 'info');
+                log('  d = e⁻¹ mod φ(n) = '+r.calculation['d = e⁻¹ mod φ(n)'], 'info');
+            }
             loadInfo();
         } else {
             el.textContent = r.error||'失败'; el.style.color = '#f87171';

@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '1.7.0'
+APP_VERSION = '2.1.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -54,7 +54,7 @@ _connection_state = {
     'peer_public_key_raw': None,
 }
 _received_data = []
-_key_files = {'pub': None, 'priv': None}
+_key_files = {'pub': None, 'priv': None, 'dh_priv': None, 'dh_pub': None}
 _negotiate_server_status = {'running': False, 'port': None, 'error': None}
 _negotiate_steps = []
 _negotiate_server_running = False
@@ -86,6 +86,19 @@ def get_rsa_keys():
             _key_files['pub'] = os.path.abspath(pub_path)
             _key_files['priv'] = os.path.abspath(priv_path)
     return _rsa_keys
+
+
+def _save_dh_keys():
+    global _key_files
+    if _dh_peer:
+        dh_priv_path = os.path.join(DATA_DIR, 'dh_private_key.txt')
+        dh_pub_path = os.path.join(DATA_DIR, 'dh_public_key.txt')
+        with open(dh_priv_path, 'w') as f:
+            f.write(hex(_dh_peer.private_key))
+        with open(dh_pub_path, 'w') as f:
+            f.write(hex(_dh_peer.public_key))
+        _key_files['dh_priv'] = os.path.abspath(dh_priv_path)
+        _key_files['dh_pub'] = os.path.abspath(dh_pub_path)
 
 
 def _reset_connection_state():
@@ -169,6 +182,8 @@ def get_info():
             'private_key': hex(_dh_peer.private_key),
             'public_key': hex(_dh_peer.public_key),
             'shared_secret': hex(_dh_peer.shared_secret) if _dh_peer.shared_secret else None,
+            'private_key_file': _key_files.get('dh_priv', ''),
+            'public_key_file': _key_files.get('dh_pub', ''),
         }
     if _connection_state.get('session_key'):
         key_info['session'] = {
@@ -264,14 +279,14 @@ def test_tcp():
         import re
         is_ip = re.match(r'^\d+\.\d+\.\d+\.\d+$', host)
         if is_ip:
-            results.append({'step': 'DNS Resolution', 'ok': True, 'detail': f'{host} is an IP address, no DNS needed'})
+            results.append({'step': 'DNS解析', 'ok': True, 'detail': f'{host} 是IP地址，无需DNS解析'})
         else:
             try:
                 resolved_ip = socket.gethostbyname(host)
-                results.append({'step': 'DNS Resolution', 'ok': True, 'detail': f'{host} -> {resolved_ip}'})
+                results.append({'step': 'DNS解析', 'ok': True, 'detail': f'{host} -> {resolved_ip}'})
             except Exception as e:
-                results.append({'step': 'DNS Resolution', 'ok': False, 'detail': str(e)})
-                return jsonify({'success': False, 'results': results, 'error': 'DNS resolution failed'})
+                results.append({'step': 'DNS解析', 'ok': False, 'detail': str(e)})
+                return jsonify({'success': False, 'results': results, 'error': 'DNS解析失败'})
 
         start = time.time()
         try:
@@ -280,15 +295,15 @@ def test_tcp():
             test_sock.connect((host, port))
             latency = round((time.time() - start) * 1000, 1)
             test_sock.close()
-            results.append({'step': f'TCP Connect {host}:{port}', 'ok': True, 'detail': f'Success, latency {latency}ms'})
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': True, 'detail': f'成功，延迟 {latency}ms'})
         except socket.timeout:
-            results.append({'step': f'TCP Connect {host}:{port}', 'ok': False, 'detail': 'Timeout (3s)'})
-            return jsonify({'success': False, 'results': results, 'error': 'TCP connection timeout'})
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': False, 'detail': '超时(3秒)'})
+            return jsonify({'success': False, 'results': results, 'error': 'TCP连接超时'})
         except ConnectionRefusedError:
-            results.append({'step': f'TCP Connect {host}:{port}', 'ok': False, 'detail': 'Connection refused'})
-            return jsonify({'success': False, 'results': results, 'error': 'Connection refused'})
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': False, 'detail': '连接被拒绝'})
+            return jsonify({'success': False, 'results': results, 'error': '连接被拒绝'})
         except Exception as e:
-            results.append({'step': f'TCP Connect {host}:{port}', 'ok': False, 'detail': str(e)})
+            results.append({'step': f'TCP连接 {host}:{port}', 'ok': False, 'detail': str(e)})
             return jsonify({'success': False, 'results': results, 'error': str(e)})
 
         try:
@@ -302,11 +317,11 @@ def test_tcp():
             pong = json.loads(pong_data.decode())
             test_sock2.close()
             if pong.get('type') == 'pong':
-                results.append({'step': 'Protocol Communication', 'ok': True, 'detail': f"Peer mode: {pong.get('mode','?')}, listen port: {pong.get('listen_port','?')}"})
+                results.append({'step': '协议通信', 'ok': True, 'detail': f"对方模式: {pong.get('mode','?')}, 监听端口: {pong.get('listen_port','?')}"})
             else:
-                results.append({'step': 'Protocol Communication', 'ok': False, 'detail': f"Unexpected response: {pong}"})
+                results.append({'step': '协议通信', 'ok': False, 'detail': f"异常响应: {pong}"})
         except Exception as e:
-            results.append({'step': 'Protocol Communication', 'ok': False, 'detail': str(e)})
+            results.append({'step': '协议通信', 'ok': False, 'detail': str(e)})
 
         return jsonify({'success': True, 'results': results})
     except Exception as e:
@@ -319,39 +334,104 @@ def set_mode():
     data = request.get_json() or {}
     new_mode = data.get('mode', '')
     if new_mode not in ('sender', 'receiver'):
-        return jsonify({'success': False, 'error': 'Mode must be sender or receiver'})
+        return jsonify({'success': False, 'error': '模式必须是 sender 或 receiver'})
     if new_mode == MODE:
-        return jsonify({'success': True, 'mode': MODE, 'message': f'Already in {"sender" if MODE=="sender" else "receiver"} mode'})
+        return jsonify({'success': True, 'mode': MODE, 'message': f'已经是{"发送端" if MODE=="sender" else "接收端"}模式'})
     MODE = new_mode
     if not _negotiate_server_running:
         start_negotiate_server()
-    return jsonify({'success': True, 'mode': MODE, 'message': f'Switched to {"sender" if MODE=="sender" else "receiver"} mode, negotiate server running'})
+    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，协商服务器运行中'})
 
 
 # ==================== Custom Keys API ====================
 
+def _next_prime(n):
+    """找到 >= n 的最小素数（用于自动纠正用户输入的非素数）"""
+    from rsa import _miller_rabin
+    if n <= 2:
+        return 2
+    if n % 2 == 0:
+        n += 1
+    while not _miller_rabin(n, k=20):
+        n += 2
+    return n
+
 @app.route('/api/set_rsa_keys', methods=['POST'])
 def set_rsa_keys():
-    """Set custom RSA public/private keys. Frontend specifies e, n, d; backend updates in real-time."""
+    """根据用户指定的素数 p, q 和公钥指数 e 生成 RSA 密钥对。
+    RSA 密钥生成流程: p,q → n=p*q → φ(n)=(p-1)(q-1) → d=e^(-1) mod φ(n)
+    如果用户输入的 p/q 不是素数，自动纠正为最近的素数。
+    """
     global _rsa_keys, _key_files
     try:
         data = request.get_json() or {}
-        e_val = data.get('e')
-        n_val = data.get('n')
-        d_val = data.get('d')
+        p_val = data.get('p')
+        q_val = data.get('q')
+        e_val = data.get('e')  # 可选，默认65537
 
-        if e_val is None or n_val is None or d_val is None:
-            return jsonify({'success': False, 'error': 'Must provide e, n, d values'})
+        if p_val is None or q_val is None:
+            return jsonify({'success': False, 'error': '必须提供素数 p 和 q'})
 
-        e_str = str(e_val)
-        n_str = str(n_val)
-        d_str = str(d_val)
-        e_int = int(e_str, 16) if e_str.startswith('0x') or e_str.startswith('0X') else int(e_str)
-        n_int = int(n_str, 16) if n_str.startswith('0x') or n_str.startswith('0X') else int(n_str)
-        d_int = int(d_str, 16) if d_str.startswith('0x') or d_str.startswith('0X') else int(d_str)
+        p_str = str(p_val)
+        q_str = str(q_val)
+        p_int = int(p_str, 16) if p_str.startswith('0x') or p_str.startswith('0X') else int(p_str)
+        q_int = int(q_str, 16) if q_str.startswith('0x') or q_str.startswith('0X') else int(q_str)
 
-        if n_int <= 0 or e_int <= 0 or d_int <= 0:
-            return jsonify({'success': False, 'error': 'Key values must be positive integers'})
+        if p_int <= 1 or q_int <= 1:
+            return jsonify({'success': False, 'error': 'p 和 q 必须是大于1的正整数'})
+
+        from rsa import _miller_rabin, _gcd, mod_inverse
+
+        corrections = []  # 记录纠正信息
+
+        # 素数验证与自动纠正
+        if not _miller_rabin(p_int, k=20):
+            old_p = p_int
+            p_int = _next_prime(p_int)
+            corrections.append(f'输入的 p={old_p} 不是素数，已自动纠正为最近的素数 p={p_int}')
+
+        if not _miller_rabin(q_int, k=20):
+            old_q = q_int
+            q_int = _next_prime(q_int)
+            corrections.append(f'输入的 q={old_q} 不是素数，已自动纠正为最近的素数 q={q_int}')
+
+        if p_int == q_int:
+            # 如果纠正后 p==q，给 q 找下一个素数
+            old_q = q_int
+            q_int = _next_prime(q_int + 1)
+            corrections.append(f'纠正后 p=q={p_int}，已将 q 调整为下一个素数 q={q_int}')
+
+        # 计算 n = p * q
+        n_int = p_int * q_int
+        # 计算欧拉函数 φ(n) = (p-1)(q-1)
+        phi_n = (p_int - 1) * (q_int - 1)
+
+        # 设置公钥指数 e
+        if e_val is not None:
+            e_str = str(e_val)
+            e_int = int(e_str, 16) if e_str.startswith('0x') or e_str.startswith('0X') else int(e_str)
+        else:
+            e_int = 65537
+
+        # e 不合法时自动纠正
+        if e_int <= 1 or e_int >= phi_n:
+            old_e = e_int
+            e_int = 65537
+            if e_int >= phi_n:
+                e_int = 3
+                while _gcd(e_int, phi_n) != 1:
+                    e_int += 2
+            corrections.append(f'输入的 e={old_e} 不合法，已自动纠正为 e={e_int}')
+
+        if _gcd(e_int, phi_n) != 1:
+            old_e = e_int
+            e_int = 3
+            while _gcd(e_int, phi_n) != 1:
+                e_int += 2
+            corrections.append(f'e={old_e} 与 φ(n) 不互素，已自动纠正为 e={e_int}')
+
+        # 计算私钥 d = e^(-1) mod φ(n)（私钥由公钥计算得出，不能随意指定）
+        d_int = mod_inverse(e_int, phi_n)
 
         with _rsa_lock:
             _rsa_keys = ((e_int, n_int), (d_int, n_int))
@@ -360,12 +440,24 @@ def set_rsa_keys():
             _key_files['pub'] = os.path.abspath(pub_path)
             _key_files['priv'] = os.path.abspath(priv_path)
 
-        return jsonify({
+        result = {
             'success': True,
-            'message': 'RSA keys updated',
+            'message': 'RSA 密钥已根据 p, q 生成',
+            'corrections': corrections,
+            'calculation': {
+                'p': hex(p_int),
+                'q': hex(q_int),
+                'n = p × q': hex(n_int),
+                'φ(n) = (p-1)(q-1)': hex(phi_n),
+                'e': e_int,
+                'd = e⁻¹ mod φ(n)': hex(d_int),
+            },
             'public_key': {'e': e_int, 'n': hex(n_int), 'n_bits': n_int.bit_length()},
             'private_key': {'d': hex(d_int), 'd_bits': d_int.bit_length()},
-        })
+        }
+        return jsonify(result)
+    except ValueError as ve:
+        return jsonify({'success': False, 'error': f'计算错误: {ve}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -381,7 +473,7 @@ def set_dh_keys():
         generator_val = data.get('generator')
 
         if private_key_val is None:
-            return jsonify({'success': False, 'error': 'Must provide private_key value'})
+            return jsonify({'success': False, 'error': '必须提供 private_key 值'})
 
         pk_str = str(private_key_val)
         if pk_str.startswith('0x') or pk_str.startswith('0X'):
@@ -399,15 +491,16 @@ def set_dh_keys():
             g_int = None
 
         if pk_int <= 0:
-            return jsonify({'success': False, 'error': 'DH private key must be positive'})
+            return jsonify({'success': False, 'error': 'DH 私钥必须是正整数'})
 
         _dh_peer = DHPeer(bits=256, prime=p_int, generator=g_int)
         _dh_peer.private_key = pk_int
         _dh_peer.public_key = pow(_dh_peer.g, _dh_peer.private_key, _dh_peer.p)
+        _save_dh_keys()
 
         return jsonify({
             'success': True,
-            'message': 'DH keys updated',
+            'message': 'DH 密钥已更新',
             'private_key': hex(_dh_peer.private_key),
             'public_key': hex(_dh_peer.public_key),
             'prime_bits': _dh_peer.p.bit_length(),
@@ -430,10 +523,11 @@ def regenerate_keys():
 
         if _dh_peer:
             _dh_peer = DHPeer(bits=256)
+            _save_dh_keys()
 
         return jsonify({
             'success': True,
-            'message': 'All keys regenerated randomly',
+            'message': '所有密钥已随机重新生成',
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -450,6 +544,9 @@ def api_connect():
         data = request.get_json() or {}
         target_host = data.get('host', RECEIVER_HOST)
         target_port = int(data.get('port', RECEIVER_PORT))
+
+        if _connection_state['status'] == 'connected':
+            return jsonify({'success': False, 'error': '已处于连接状态，请先断开当前连接'})
 
         _connection_state['status'] = 'connecting'
         _connection_state['peer_ip'] = target_host
@@ -484,47 +581,47 @@ def api_connect():
 
         handshake_info = [
             {'step': 1, 'dir': '->', 'from': f'{local_ip}:{local_port}', 'to': f'{target_host}:{target_port}',
-             'flag': 'SYN', 'desc': 'Send SYN packet'},
+             'flag': 'SYN', 'desc': '发送 SYN 报文'},
             {'step': 2, 'dir': '<-', 'from': f'{target_host}:{target_port}', 'to': f'{local_ip}:{local_port}',
-             'flag': 'SYN+ACK', 'desc': 'Receive SYN+ACK'},
+             'flag': 'SYN+ACK', 'desc': '接收 SYN+ACK 报文'},
             {'step': 3, 'dir': '->', 'from': f'{local_ip}:{local_port}', 'to': f'{target_host}:{target_port}',
-             'flag': 'ACK', 'desc': 'Send ACK, connection established'},
+             'flag': 'ACK', 'desc': '发送 ACK 报文，连接建立'},
         ]
         _connection_state['tcp_handshake'] = handshake_info
 
         result['steps'].append({
             'id': 1,
-            'title': 'Step 1: TCP Three-way Handshake',
+            'title': '第1步：TCP 三次握手',
             'status': 'success',
-            'description': 'Establish reliable TCP connection with receiver',
+            'description': '与接收端建立可靠的 TCP 连接',
             'detail': {
-                'Connection Parameters': {
-                    'Sender (local)': f'{local_ip}:{local_port}',
-                    'Receiver (target)': f'{target_host}:{target_port}',
-                    'Protocol': 'TCP',
-                    'Window Size': str(win_size),
+                '连接参数': {
+                    '发送端（本机）': f'{local_ip}:{local_port}',
+                    '接收端（目标）': f'{target_host}:{target_port}',
+                    '协议': 'TCP',
+                    '窗口大小': str(win_size),
                     'MSS': str(mss)
                 },
-                '1st Handshake (SYN)': {
-                    'Direction': f'{local_ip}:{local_port} -> {target_host}:{target_port}',
-                    'Flags': 'SYN=1',
-                    'Seq': str(seq1),
-                    'Ack': '0',
-                    'Meaning': 'Sender requests connection with initial seq=' + str(seq1)
+                '第一次握手（SYN）': {
+                    '方向': f'{local_ip}:{local_port} -> {target_host}:{target_port}',
+                    '标志位': 'SYN=1',
+                    '序列号': str(seq1),
+                    '确认号': '0',
+                    '含义': '发送端请求建立连接，初始序列号=' + str(seq1)
                 },
-                '2nd Handshake (SYN+ACK)': {
-                    'Direction': f'{target_host}:{target_port} -> {local_ip}:{local_port}',
-                    'Flags': 'SYN=1, ACK=1',
-                    'Seq': str(seq2),
-                    'Ack': str(seq1 + 1),
-                    'Meaning': 'Receiver confirms SYN, sends own seq=' + str(seq2)
+                '第二次握手（SYN+ACK）': {
+                    '方向': f'{target_host}:{target_port} -> {local_ip}:{local_port}',
+                    '标志位': 'SYN=1, ACK=1',
+                    '序列号': str(seq2),
+                    '确认号': str(seq1 + 1),
+                    '含义': '接收端确认 SYN，发送自己的序列号=' + str(seq2)
                 },
-                '3rd Handshake (ACK)': {
-                    'Direction': f'{local_ip}:{local_port} -> {target_host}:{target_port}',
-                    'Flags': 'ACK=1',
-                    'Seq': str(seq1 + 1),
-                    'Ack': str(seq2 + 1),
-                    'Meaning': 'Sender confirms, connection established'
+                '第三次握手（ACK）': {
+                    '方向': f'{local_ip}:{local_port} -> {target_host}:{target_port}',
+                    '标志位': 'ACK=1',
+                    '序列号': str(seq1 + 1),
+                    '确认号': str(seq2 + 1),
+                    '含义': '发送端确认，TCP连接建立完成'
                 },
             }
         })
@@ -534,15 +631,15 @@ def api_connect():
         except socket.timeout:
             result['steps'][0]['status'] = 'error'
             _connection_state['status'] = 'disconnected'
-            return jsonify({'success': False, 'error': f'TCP connection timeout: cannot connect to {target_host}:{target_port}', 'steps': result['steps']})
+            return jsonify({'success': False, 'error': f'TCP连接超时：无法连接到 {target_host}:{target_port}', 'steps': result['steps']})
         except ConnectionRefusedError:
             result['steps'][0]['status'] = 'error'
             _connection_state['status'] = 'disconnected'
-            return jsonify({'success': False, 'error': f'Connection refused: {target_host}:{target_port}', 'steps': result['steps']})
+            return jsonify({'success': False, 'error': f'连接被拒绝：{target_host}:{target_port}，请确认接收端协商服务器已启动', 'steps': result['steps']})
         except Exception as e:
             result['steps'][0]['status'] = 'error'
             _connection_state['status'] = 'disconnected'
-            return jsonify({'success': False, 'error': f'TCP connection failed: {e}', 'steps': result['steps']})
+            return jsonify({'success': False, 'error': f'TCP连接失败：{e}', 'steps': result['steps']})
 
         # Step 2: RSA Public Key Exchange
         _connection_state['status'] = 'exchanging_rsa_keys'
@@ -571,26 +668,28 @@ def api_connect():
 
         result['steps'].append({
             'id': 2,
-            'title': 'Step 2: RSA Public Key Exchange',
+            'title': '第2步：RSA 公钥交换',
             'status': 'success',
-            'description': 'Exchange RSA public keys for signature verification',
+            'description': '双方交换 RSA 公钥，用于后续签名验证',
             'detail': {
-                'My RSA Public Key': {
-                    'e': str(my_rsa_pub[0]),
-                    'n': str(my_rsa_pub[1])[:64] + f"... ({my_rsa_pub[1].bit_length()} bits)",
+                '本机 RSA 公钥': {
+                    'e（指数）': str(my_rsa_pub[0]),
+                    'n（模数）': str(my_rsa_pub[1])[:64] + f"... ({my_rsa_pub[1].bit_length()} 位)",
                 },
-                'Peer RSA Public Key': {
-                    'e': str(peer_rsa_e),
-                    'n': str(peer_rsa_n)[:64] + f"... ({peer_rsa_n.bit_length()} bits)",
+                '对方 RSA 公钥': {
+                    'e（指数）': str(peer_rsa_e),
+                    'n（模数）': str(peer_rsa_n)[:64] + f"... ({peer_rsa_n.bit_length()} 位)",
                 },
-                'Purpose': 'Used to verify DH public key signatures in next step'
+                '用途': '用于验证下一步中 DH 公钥的 RSA 数字签名'
             }
         })
 
         # Step 3: DH Public Key Exchange with RSA Signature
         _connection_state['status'] = 'exchanging_dh_keys'
 
-        _dh_peer = DHPeer(bits=256)
+        if not _dh_peer or _dh_peer.shared_secret is not None:
+            _dh_peer = DHPeer(bits=256)
+            _save_dh_keys()
         my_dh_public = _dh_peer.get_public_key()
 
         my_dh_public_bytes = my_dh_public.to_bytes((my_dh_public.bit_length() + 7) // 8, 'big')
@@ -612,20 +711,20 @@ def api_connect():
 
         result['steps'].append({
             'id': 3,
-            'title': 'Step 3: DH Public Key Exchange (with RSA Signature)',
+            'title': '第3步：DH 公钥交换（带 RSA 签名）',
             'status': 'success',
-            'description': 'Exchange DH public keys signed with RSA private key',
+            'description': '交换 DH 公钥，并用 RSA 私钥对 DH 公钥签名',
             'detail': {
-                'My DH Key Pair': {
-                    'DH Private Key (secret)': hex(_dh_peer.private_key)[:40] + '...',
-                    'DH Public Key': hex(my_dh_public),
+                '本机 DH 密钥对': {
+                    'DH 私钥（保密）': hex(_dh_peer.private_key)[:40] + '...',
+                    'DH 公钥': hex(my_dh_public),
                 },
-                'My RSA Signature on DH Public Key': {
-                    'Signature': my_signature.hex()[:64] + '...',
-                    'Algorithm': 'SHA256(DH_pub) -> RSA_sign(hash)',
+                '本机 RSA 签名（对 DH 公钥）': {
+                    '签名值': my_signature.hex()[:64] + '...',
+                    '算法': 'SHA256(DH公钥) -> RSA签名(哈希)',
                 },
-                'Peer DH Public Key': hex(peer_dh_public),
-                'Peer DH Signature': peer_dh_signature.hex()[:64] + '...',
+                '对方 DH 公钥': hex(peer_dh_public),
+                '对方 RSA 签名': peer_dh_signature.hex()[:64] + '...',
             }
         })
 
@@ -645,33 +744,33 @@ def api_connect():
         if not peer_verified:
             result['steps'].append({
                 'id': 4,
-                'title': 'Step 4: Verify Peer Signature',
+                'title': '第4步：验证对方签名',
                 'status': 'error',
-                'description': 'RSA signature verification FAILED',
+                'description': 'RSA 签名验证失败',
                 'detail': {
-                    'Result': 'FAILED',
-                    'Possible Cause': 'Man-in-the-middle attack or data corruption'
+                    '结果': '失败',
+                    '可能原因': '中间人攻击或数据损坏'
                 }
             })
             sock.close()
             _connection_state['status'] = 'disconnected'
-            return jsonify({'success': False, 'error': 'Peer signature verification failed!', 'steps': result['steps']})
+            return jsonify({'success': False, 'error': '对方签名验证失败！可能存在中间人攻击', 'steps': result['steps']})
 
         result['steps'].append({
             'id': 4,
-            'title': 'Step 4: Verify Peer Signature',
+            'title': '第4步：验证对方签名',
             'status': 'success',
-            'description': 'Verify peer DH public key signature using peer RSA public key',
+            'description': '使用对方 RSA 公钥验证其 DH 公钥的数字签名',
             'detail': {
-                'Verification Method': [
-                    '1. Compute SHA256(peer_DH_pub) -> H',
-                    '2. Decrypt signature with peer RSA pub key -> H\'',
-                    '3. Compare H == H\''
+                '验证方法': [
+                    '1. 计算 SHA256(对方DH公钥) -> H',
+                    '2. 用对方 RSA 公钥解密签名 -> H\'',
+                    '3. 比较 H == H\''
                 ],
-                'Result': 'PASSED',
-                'Actual Hash (H)': hex(actual_hash_dbg),
-                'Recovered Hash (H\')': hex(recovered_hash_dbg),
-                'Meaning': 'Peer DH public key is authentic and untampered'
+                '结果': '通过',
+                '实际哈希值 (H)': hex(actual_hash_dbg),
+                '恢复哈希值 (H\')': hex(recovered_hash_dbg),
+                '含义': '对方 DH 公钥是真实的，未被篡改'
             }
         })
 
@@ -688,23 +787,23 @@ def api_connect():
 
         result['steps'].append({
             'id': 5,
-            'title': 'Step 5: Compute Shared Session Key',
+            'title': '第5步：计算共享会话密钥',
             'status': 'success',
-            'description': 'Both sides independently compute the same shared secret via DH, derive AES and HMAC keys',
+            'description': '双方独立计算相同的 DH 共享秘密，派生 AES 和 HMAC 密钥',
             'detail': {
-                'DH Shared Secret Computation': {
-                    'Formula': 'shared_secret = peer_DH_pub ^ my_DH_priv mod p',
-                    'Math': '(g^b)^a mod p = (g^a)^b mod p = g^(ab) mod p',
-                    'Security': 'Discrete logarithm problem prevents eavesdroppers from computing shared secret'
+                'DH 共享秘密计算': {
+                    '公式': 'shared_secret = 对方DH公钥 ^ 本机DH私钥 mod p',
+                    '数学原理': '(g^b)^a mod p = (g^a)^b mod p = g^(ab) mod p',
+                    '安全性': '离散对数问题使窃听者无法计算共享秘密'
                 },
-                'Key Derivation (SHA-256)': {
-                    'Input': f'DH shared secret ({_dh_peer.shared_secret.bit_length()} bits)',
-                    'Output (32 bytes)': 'First 16 bytes = AES-128-CBC key | Last 16 bytes = HMAC-SHA256 key',
-                    'AES Session Key': session_key.hex(),
-                    'HMAC Key': hmac_key.hex()
+                '密钥派生（SHA-256）': {
+                    '输入': f'DH 共享秘密（{_dh_peer.shared_secret.bit_length()} 位）',
+                    '输出（32字节）': '前16字节 = AES-128-CBC 密钥 | 后16字节 = HMAC-SHA256 密钥',
+                    'AES 会话密钥': session_key.hex(),
+                    'HMAC 密钥': hmac_key.hex()
                 },
-                'Result': {
-                    'Status': 'Connection established',
+                '结果': {
+                    '状态': '连接建立成功',
                 }
             }
         })
@@ -720,7 +819,7 @@ def api_connect():
             sock.close()
         except:
             pass
-        return jsonify({'success': False, 'error': f'Connection error: {e}', 'detail': traceback.format_exc()})
+        return jsonify({'success': False, 'error': f'连接错误：{e}', 'detail': traceback.format_exc()})
 
 
 @app.route('/api/debug_connect', methods=['POST'])
@@ -735,23 +834,23 @@ def debug_connect():
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             sock.connect((host, port))
-            results.append({'step': 'TCP Connect', 'ok': True, 'detail': f'Connected to {host}:{port}'})
+            results.append({'step': 'TCP连接', 'ok': True, 'detail': f'已连接到 {host}:{port}'})
         except socket.timeout:
-            results.append({'step': 'TCP Connect', 'ok': False, 'detail': f'Timeout {host}:{port}'})
+            results.append({'step': 'TCP连接', 'ok': False, 'detail': f'连接超时 {host}:{port}'})
             return jsonify({'success': False, 'results': results})
         except ConnectionRefusedError:
-            results.append({'step': 'TCP Connect', 'ok': False, 'detail': f'Refused {host}:{port}'})
+            results.append({'step': 'TCP连接', 'ok': False, 'detail': f'连接被拒绝 {host}:{port}'})
             return jsonify({'success': False, 'results': results})
         except Exception as e:
-            results.append({'step': 'TCP Connect', 'ok': False, 'detail': str(e)})
+            results.append({'step': 'TCP连接', 'ok': False, 'detail': str(e)})
             return jsonify({'success': False, 'results': results})
 
         try:
             ping_msg = json.dumps({'type': 'ping'}).encode()
             sock.sendall(struct.pack('>I', len(ping_msg)) + ping_msg)
-            results.append({'step': 'Send ping', 'ok': True, 'detail': 'Ping sent'})
+            results.append({'step': '发送Ping', 'ok': True, 'detail': 'Ping已发送'})
         except Exception as e:
-            results.append({'step': 'Send ping', 'ok': False, 'detail': str(e)})
+            results.append({'step': '发送Ping', 'ok': False, 'detail': str(e)})
             sock.close()
             return jsonify({'success': False, 'results': results})
 
@@ -759,19 +858,19 @@ def debug_connect():
             pong_len_data = _recv_exact(sock, 4, timeout=5)
             pong_len = struct.unpack('>I', pong_len_data)[0]
             if pong_len > 10000:
-                results.append({'step': 'Read pong', 'ok': False, 'detail': f'Abnormal length: {pong_len}'})
+                results.append({'step': '读取Pong', 'ok': False, 'detail': f'异常长度: {pong_len}'})
                 sock.close()
                 return jsonify({'success': False, 'results': results})
             pong_data = _recv_exact(sock, pong_len, timeout=5)
             pong = json.loads(pong_data.decode())
-            results.append({'step': 'Read pong', 'ok': True, 'detail': f"Peer mode: {pong.get('mode')}, listen port: {pong.get('listen_port')}"})
+            results.append({'step': '读取Pong', 'ok': True, 'detail': f"对方模式: {pong.get('mode')}, 监听端口: {pong.get('listen_port')}"})
         except Exception as e:
-            results.append({'step': 'Read pong', 'ok': False, 'detail': f'Failed: {e}'})
+            results.append({'step': '读取Pong', 'ok': False, 'detail': f'失败: {e}'})
             sock.close()
             return jsonify({'success': False, 'results': results})
 
         sock.close()
-        results.append({'step': 'Conclusion', 'ok': True, 'detail': 'TCP and protocol OK, ready for full connection'})
+        results.append({'step': '结论', 'ok': True, 'detail': 'TCP和协议通信正常，可以进行完整连接'})
         return jsonify({'success': True, 'results': results})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -793,7 +892,7 @@ def reset_connection():
     _reset_connection_state()
     global _negotiate_steps
     _negotiate_steps = []
-    return jsonify({'success': True, 'message': 'Connection reset'})
+    return jsonify({'success': True, 'message': '连接已断开'})
 
 
 @app.route('/api/restart_negotiate', methods=['POST'])
@@ -883,14 +982,14 @@ def start_negotiate_server():
 
                 _negotiate_steps.append({
                     'id': 1,
-                    'title': 'Step 1: TCP Three-way Handshake',
+                    'title': '第1步：TCP 三次握手',
                     'status': 'success',
-                    'description': 'Sender initiated TCP connection, three-way handshake completed',
+                    'description': '发送端发起 TCP 连接，三次握手已完成',
                     'detail': {
-                        'Connection Parameters': {
-                            'Sender (peer)': f'{addr[0]}:{addr[1]}',
-                            'Receiver (local)': f'{_get_local_ip()}:{LISTEN_PORT}',
-                            'Protocol': 'TCP',
+                        '连接参数': {
+                            '发送端（对方）': f'{addr[0]}:{addr[1]}',
+                            '接收端（本机）': f'{_get_local_ip()}:{LISTEN_PORT}',
+                            '协议': 'TCP',
                         },
                     }
                 })
@@ -910,17 +1009,17 @@ def start_negotiate_server():
 
                     _negotiate_steps.append({
                         'id': 2,
-                        'title': 'Step 2: RSA Public Key Exchange',
+                        'title': '第2步：RSA 公钥交换',
                         'status': 'success',
-                        'description': 'Received sender RSA public key, sent our RSA public key',
+                        'description': '收到发送端 RSA 公钥，发送了本机 RSA 公钥',
                         'detail': {
-                            'Peer RSA Public Key': {
-                                'e': str(peer_rsa_e),
-                                'n': str(peer_rsa_n)[:64] + f"... ({peer_rsa_n.bit_length()} bits)",
+                            '对方 RSA 公钥': {
+                                'e（指数）': str(peer_rsa_e),
+                                'n（模数）': str(peer_rsa_n)[:64] + f"... ({peer_rsa_n.bit_length()} 位)",
                             },
-                            'My RSA Public Key': {
-                                'e': str(my_rsa_pub[0]),
-                                'n': str(my_rsa_pub[1])[:64] + f"... ({my_rsa_pub[1].bit_length()} bits)",
+                            '本机 RSA 公钥': {
+                                'e（指数）': str(my_rsa_pub[0]),
+                                'n（模数）': str(my_rsa_pub[1])[:64] + f"... ({my_rsa_pub[1].bit_length()} 位)",
                             },
                         }
                     })
@@ -941,9 +1040,11 @@ def start_negotiate_server():
                     peer_dh_public = int(dh_req['dh_public'], 16)
                     peer_dh_signature = bytes.fromhex(dh_req['dh_signature'])
 
-                    _dh_peer = DHPeer(bits=256)
+                    if not _dh_peer or _dh_peer.shared_secret is not None:
+                        _dh_peer = DHPeer(bits=256)
                     my_dh_public = _dh_peer.get_public_key()
                     my_dh_private = _dh_peer.private_key
+                    _save_dh_keys()
 
                     my_dh_public_bytes = my_dh_public.to_bytes((my_dh_public.bit_length() + 7) // 8, 'big')
                     my_signature = rsa_sign(my_dh_public_bytes, get_rsa_keys()[1])
@@ -957,14 +1058,14 @@ def start_negotiate_server():
 
                     _negotiate_steps.append({
                         'id': 3,
-                        'title': 'Step 3: DH Public Key Exchange (with RSA Signature)',
+                        'title': '第3步：DH 公钥交换（带 RSA 签名）',
                         'status': 'success',
-                        'description': 'Exchanged DH public keys with RSA signatures',
+                        'description': '交换了 DH 公钥及 RSA 签名',
                         'detail': {
-                            'My DH Public Key': hex(my_dh_public),
-                            'My RSA Signature': my_signature.hex()[:64] + '...',
-                            'Peer DH Public Key': hex(peer_dh_public),
-                            'Peer RSA Signature': peer_dh_signature.hex()[:64] + '...',
+                            '本机 DH 公钥': hex(my_dh_public),
+                            '本机 RSA 签名': my_signature.hex()[:64] + '...',
+                            '对方 DH 公钥': hex(peer_dh_public),
+                            '对方 RSA 签名': peer_dh_signature.hex()[:64] + '...',
                         }
                     })
 
@@ -981,29 +1082,29 @@ def start_negotiate_server():
                     if peer_verified:
                         _negotiate_steps.append({
                             'id': 4,
-                            'title': 'Step 4: Verify Peer Signature',
+                            'title': '第4步：验证对方签名',
                             'status': 'success',
-                            'description': 'Peer DH public key signature verified successfully',
+                            'description': '对方 DH 公钥签名验证通过',
                             'detail': {
-                                'Verification Method': [
-                                    '1. Compute SHA256(peer_DH_pub) -> H',
-                                    '2. Decrypt signature with peer RSA pub key -> H\'',
-                                    '3. Compare H == H\''
+                                '验证方法': [
+                                    '1. 计算 SHA256(对方DH公钥) -> H',
+                                    '2. 用对方 RSA 公钥解密签名 -> H\'',
+                                    '3. 比较 H == H\''
                                 ],
-                                'Result': 'PASSED',
-                                'Actual Hash (H)': hex(actual_hash_dbg),
-                                'Recovered Hash (H\')': hex(recovered_hash_dbg),
+                                '结果': '通过',
+                                '实际哈希值 (H)': hex(actual_hash_dbg),
+                                '恢复哈希值 (H\')': hex(recovered_hash_dbg),
                             }
                         })
                     else:
                         _negotiate_steps.append({
                             'id': 4,
-                            'title': 'Step 4: Verify Peer Signature',
+                            'title': '第4步：验证对方签名',
                             'status': 'error',
-                            'description': 'Peer signature verification FAILED',
+                            'description': '对方签名验证失败',
                             'detail': {
-                                'Result': 'FAILED',
-                                'Warning': 'Possible MITM attack or data corruption'
+                                '结果': '失败',
+                                '警告': '可能存在中间人攻击或数据损坏'
                             }
                         })
                         _connection_state['status'] = 'disconnected'
@@ -1022,20 +1123,20 @@ def start_negotiate_server():
 
                         _negotiate_steps.append({
                             'id': 5,
-                            'title': 'Step 5: Compute Shared Session Key',
+                            'title': '第5步：计算共享会话密钥',
                             'status': 'success',
-                            'description': 'Both sides computed the same shared secret, derived AES and HMAC keys',
+                            'description': '双方计算了相同的共享秘密，派生了 AES 和 HMAC 密钥',
                             'detail': {
-                                'DH Shared Secret': {
-                                    'Formula': 'shared_secret = peer_DH_pub ^ my_DH_priv mod p',
-                                    'Security': 'Discrete logarithm problem'
+                                'DH 共享秘密': {
+                                    '公式': 'shared_secret = 对方DH公钥 ^ 本机DH私钥 mod p',
+                                    '安全性': '离散对数问题'
                                 },
-                                'Key Derivation (SHA-256)': {
-                                    'AES Session Key': session_key.hex(),
-                                    'HMAC Key': hmac_key.hex()
+                                '密钥派生（SHA-256）': {
+                                    'AES 会话密钥': session_key.hex(),
+                                    'HMAC 密钥': hmac_key.hex()
                                 },
-                                'Result': {
-                                    'Status': 'Connection established',
+                                '结果': {
+                                    '状态': '连接建立成功',
                                 }
                             }
                         })
@@ -1081,37 +1182,37 @@ def _handle_data_transfer(conn, req):
         steps = []
 
         steps.append({
-            'id': 1, 'title': 'Receive Encrypted Data',
-            'description': 'Received encrypted data packet and digital signature from sender',
+            'id': 1, 'title': '接收加密数据',
+            'description': '收到发送端的加密数据包和数字签名',
             'data': {
-                'Encrypted packet length': f'{data_len} bytes',
-                'Ciphertext length': f'{len(ct)} bytes',
-                'Signature length': f'{sig_len} bytes',
-                'Sender IP': _connection_state.get('peer_ip', 'unknown'),
+                '加密数据包长度': f'{data_len} 字节',
+                '密文长度': f'{len(ct)} 字节',
+                '签名长度': f'{sig_len} 字节',
+                '发送端 IP': _connection_state.get('peer_ip', '未知'),
             }
         })
 
         computed_hmac = hmac_sha256(hmac_key, ct)
         hmac_valid = (computed_hmac == recv_hmac)
         steps.append({
-            'id': 2, 'title': 'HMAC-SHA256 Integrity Verification',
-            'description': 'Recompute HMAC with DH-derived key and compare with received HMAC',
+            'id': 2, 'title': 'HMAC-SHA256 完整性验证',
+            'description': '用 DH 派生的密钥重新计算 HMAC，与收到的 HMAC 比较',
             'data': {
-                'HMAC Key': hmac_key.hex(),
-                'Received HMAC': recv_hmac.hex(),
-                'Computed HMAC': computed_hmac.hex(),
-                'Result': 'PASSED - Data intact' if hmac_valid else 'FAILED - Data may be tampered!',
+                'HMAC 密钥': hmac_key.hex(),
+                '收到的 HMAC': recv_hmac.hex(),
+                '计算的 HMAC': computed_hmac.hex(),
+                '结果': '通过 - 数据完整' if hmac_valid else '失败 - 数据可能被篡改！',
             },
             'status': 'success' if hmac_valid else 'error'
         })
 
         sig_verified = rsa_verify(ct, signature, _connection_state.get('peer_public_key_raw', get_rsa_keys()[0]))
         steps.append({
-            'id': 3, 'title': 'RSA Digital Signature Verification',
-            'description': 'Verify signature with sender RSA public key for non-repudiation',
+            'id': 3, 'title': 'RSA 数字签名验证',
+            'description': '用发送端 RSA 公钥验证签名，确保不可否认性',
             'data': {
-                'Algorithm': 'RSA-SHA256',
-                'Result': 'PASSED - Authentic' if sig_verified else 'FAILED - Untrusted!',
+                '算法': 'RSA-SHA256',
+                '结果': '通过 - 来源可信' if sig_verified else '失败 - 来源不可信！',
             },
             'status': 'success' if sig_verified else 'error'
         })
@@ -1119,14 +1220,14 @@ def _handle_data_transfer(conn, req):
         decrypted = aes_decrypt(ct, session_key, mode='cbc', iv=recv_iv)
         decrypted_text = decrypted.decode('utf-8')
         steps.append({
-            'id': 4, 'title': 'AES-128-CBC Decryption',
-            'description': 'Decrypt ciphertext with DH-derived session key',
+            'id': 4, 'title': 'AES-128-CBC 解密',
+            'description': '用 DH 派生的会话密钥解密密文',
             'data': {
-                'AES Key': session_key.hex(),
+                'AES 密钥': session_key.hex(),
                 'IV': recv_iv.hex() if recv_iv else '',
-                'Ciphertext (first 128 bytes)': ct.hex()[:128] + '...',
-                'Decrypted length': f'{len(decrypted_text)} chars',
-                'Result': 'Success' if hmac_valid and sig_verified else 'Decrypted but verification failed',
+                '密文（前128字节）': ct.hex()[:128] + '...',
+                '解密后长度': f'{len(decrypted_text)} 字符',
+                '结果': '成功' if hmac_valid and sig_verified else '已解密但验证失败',
             },
             'status': 'success' if hmac_valid and sig_verified else 'error'
         })
@@ -1136,12 +1237,12 @@ def _handle_data_transfer(conn, req):
             f.write(decrypted_text)
 
         steps.append({
-            'id': 5, 'title': 'Save Decrypted Data',
-            'description': 'Save decrypted data to file',
+            'id': 5, 'title': '保存解密数据',
+            'description': '将解密后的数据保存到文件',
             'data': {
-                'Save path': os.path.abspath(filepath),
-                'Data length': f'{len(decrypted_text)} chars',
-                'Preview': decrypted_text[:300] + ('...' if len(decrypted_text) > 300 else ''),
+                '保存路径': os.path.abspath(filepath),
+                '数据长度': f'{len(decrypted_text)} 字符',
+                '预览': decrypted_text[:300] + ('...' if len(decrypted_text) > 300 else ''),
             }
         })
 
@@ -1159,9 +1260,9 @@ def _handle_data_transfer(conn, req):
         if not hmac_valid or not sig_verified:
             record['error'] = ''
             if not hmac_valid:
-                record['error'] += 'HMAC verification failed! '
+                record['error'] += 'HMAC验证失败！ '
             if not sig_verified:
-                record['error'] += 'RSA signature verification failed! '
+                record['error'] += 'RSA签名验证失败！ '
 
         _received_data.append(record)
 
@@ -1172,9 +1273,9 @@ def _handle_data_transfer(conn, req):
             'sig_verified': False,
             'error': str(e),
             'steps': [{
-                'id': 0, 'title': 'Receive Failed',
-                'description': 'Exception during data transfer',
-                'data': {'Error': str(e)},
+                'id': 0, 'title': '接收失败',
+                'description': '数据传输过程中发生异常',
+                'data': {'错误': str(e)},
                 'status': 'error'
             }]
         })
@@ -1186,7 +1287,7 @@ def _recv_exact(sock, n, timeout=30):
     while len(data) < n:
         chunk = sock.recv(n - len(data))
         if not chunk:
-            raise ConnectionError("Connection closed")
+            raise ConnectionError("连接已关闭")
         data += chunk
     return data
 
@@ -1202,7 +1303,7 @@ def api_capture():
         filter_rule = data.get('filter', 'ip')
 
         if not HAS_SCAPY:
-            return jsonify({'success': False, 'error': 'scapy not available'})
+            return jsonify({'success': False, 'error': 'scapy不可用'})
 
         packets_info, capture_log = capture_packets(count=count, timeout=timeout, filter_rule=filter_rule)
 
@@ -1227,7 +1328,7 @@ def api_capture():
 def capture_diag():
     result = {'scapy_available': HAS_SCAPY, 'issues': [], 'ifaces': [], 'auto_selected_iface': None}
     if not HAS_SCAPY:
-        result['issues'].append('scapy not installed')
+        result['issues'].append('scapy未安装')
         return jsonify(result)
 
     try:
@@ -1239,20 +1340,20 @@ def capture_diag():
                 ip = get_if_addr(str(iface_name))
                 result['ifaces'].append({'name': str(iface_name), 'ip': ip})
             except:
-                result['ifaces'].append({'name': str(iface_name), 'ip': 'N/A'})
+                result['ifaces'].append({'name': str(iface_name), 'ip': '不可用'})
 
         from capture import _auto_select_interface
         auto_iface = _auto_select_interface()
         result['auto_selected_iface'] = auto_iface
 
-        sniff_test = 'Not tested'
+        sniff_test = '未测试'
         if auto_iface:
             try:
                 from scapy.all import sniff as _sniff
                 pkts = _sniff(count=1, timeout=3, iface=auto_iface, store=False)
-                sniff_test = 'OK - can capture packets'
+                sniff_test = '成功 - 可以抓包'
             except Exception as e:
-                sniff_test = f'Failed: {e}'
+                sniff_test = f'失败: {e}'
         result['sniff_test'] = sniff_test
 
     except Exception as e:
@@ -1271,10 +1372,10 @@ def api_send():
         data = request.get_json() or {}
         plaintext = data.get('data', '')
         if not plaintext:
-            return jsonify({'success': False, 'error': 'No data to send'})
+            return jsonify({'success': False, 'error': '没有可发送的数据'})
 
         if not _dh_peer or not _dh_peer.get_session_key():
-            return jsonify({'success': False, 'error': 'Not connected, please establish connection first'})
+            return jsonify({'success': False, 'error': '未连接，请先建立连接'})
 
         session_key = _dh_peer.get_session_key()
         hmac_key = _dh_peer.get_hmac_key()
@@ -1282,7 +1383,7 @@ def api_send():
         peer_port = _connection_state.get('peer_listen_port') or RECEIVER_PORT
 
         if not peer_ip:
-            return jsonify({'success': False, 'error': 'No peer connection info'})
+            return jsonify({'success': False, 'error': '没有对方连接信息'})
 
         steps = []
 
@@ -1290,25 +1391,25 @@ def api_send():
         iv = os.urandom(16)
         ciphertext, iv_used = aes_encrypt(plaintext.encode('utf-8'), session_key, mode='cbc', iv=iv)
         steps.append({
-            'id': 1, 'title': 'AES-128-CBC Encryption',
-            'description': 'Encrypt plaintext with DH-derived session key',
+            'id': 1, 'title': 'AES-128-CBC 加密',
+            'description': '用 DH 派生的会话密钥加密明文',
             'detail': {
-                'AES Key': session_key.hex(),
+                'AES 密钥': session_key.hex(),
                 'IV': iv_used.hex(),
-                'Plaintext length': f'{len(plaintext)} chars',
-                'Ciphertext length': f'{len(ciphertext)} bytes',
+                '明文长度': f'{len(plaintext)} 字符',
+                '密文长度': f'{len(ciphertext)} 字节',
             }
         })
 
         # Step 2: HMAC-SHA256 Authentication
         hmac_value = hmac_sha256(hmac_key, ciphertext)
         steps.append({
-            'id': 2, 'title': 'HMAC-SHA256 Authentication',
-            'description': 'Compute HMAC for ciphertext integrity verification',
+            'id': 2, 'title': 'HMAC-SHA256 认证',
+            'description': '计算密文的 HMAC 值，用于完整性验证',
             'detail': {
-                'HMAC Key': hmac_key.hex(),
-                'HMAC Value': hmac_value.hex(),
-                'Purpose': 'Ensure data integrity during transmission',
+                'HMAC 密钥': hmac_key.hex(),
+                'HMAC 值': hmac_value.hex(),
+                '用途': '确保传输过程中数据完整性',
             }
         })
 
@@ -1316,12 +1417,12 @@ def api_send():
         my_rsa_priv = get_rsa_keys()[1]
         signature = rsa_sign(ciphertext, my_rsa_priv)
         steps.append({
-            'id': 3, 'title': 'RSA Digital Signature',
-            'description': 'Sign ciphertext with RSA private key for non-repudiation',
+            'id': 3, 'title': 'RSA 数字签名',
+            'description': '用 RSA 私钥对密文签名，确保不可否认性',
             'detail': {
-                'Signature Algorithm': 'RSA-SHA256',
-                'Signature Value': signature.hex()[:64] + '...',
-                'Purpose': 'Ensure data authenticity and non-repudiation',
+                '签名算法': 'RSA-SHA256',
+                '签名值': signature.hex()[:64] + '...',
+                '用途': '确保数据真实性和不可否认性',
             }
         })
 
@@ -1333,13 +1434,13 @@ def api_send():
 
         packet = pack_packet(ciphertext, encrypted_aes_key, encrypted_hmac_key, hmac_value, iv=iv_used)
         steps.append({
-            'id': 4, 'title': 'Pack and Send',
-            'description': 'Pack encrypted data and send via TCP',
+            'id': 4, 'title': '打包并发送',
+            'description': '将加密数据打包，通过 TCP 发送',
             'detail': {
-                'Packet size': f'{len(packet)} bytes',
-                'Target': f'{peer_ip}:{peer_port}',
-                'Encrypted AES key length': f'{len(encrypted_aes_key)} bytes',
-                'Encrypted HMAC key length': f'{len(encrypted_hmac_key)} bytes',
+                '数据包大小': f'{len(packet)} 字节',
+                '目标': f'{peer_ip}:{peer_port}',
+                '加密的 AES 密钥长度': f'{len(encrypted_aes_key)} 字节',
+                '加密的 HMAC 密钥长度': f'{len(encrypted_hmac_key)} 字节',
             }
         })
 
@@ -1354,14 +1455,14 @@ def api_send():
             send_sock.sendall(struct.pack('>I', len(signature)) + signature)
             send_sock.close()
         except Exception as e:
-            return jsonify({'success': False, 'error': f'Send failed: {e}', 'steps': steps})
+            return jsonify({'success': False, 'error': f'发送失败：{e}', 'steps': steps})
 
         steps.append({
-            'id': 5, 'title': 'Send Complete',
-            'description': 'Encrypted data sent successfully',
+            'id': 5, 'title': '发送完成',
+            'description': '加密数据已成功发送',
             'detail': {
-                'Status': 'Success',
-                'Data sent to': f'{peer_ip}:{peer_port}',
+                '状态': '成功',
+                '发送目标': f'{peer_ip}:{peer_port}',
             }
         })
 
@@ -1391,7 +1492,7 @@ def test_algo():
         from sha256 import sha256 as _sha256
         test_msg = b"test_message_123"
         h = _sha256(test_msg)
-        results['SHA-256'] = 'PASS' if len(h) == 32 else 'FAIL'
+        results['SHA-256'] = '通过' if len(h) == 32 else '失败'
     except Exception as e:
         results['SHA-256'] = str(e)
 
@@ -1400,7 +1501,7 @@ def test_algo():
         test_key = b"test_key_16bytes"
         test_msg = b"test_message"
         h = _hmac(test_key, test_msg)
-        results['HMAC-SHA256'] = 'PASS' if len(h) == 32 else 'FAIL'
+        results['HMAC-SHA256'] = '通过' if len(h) == 32 else '失败'
     except Exception as e:
         results['HMAC-SHA256'] = str(e)
 
@@ -1411,7 +1512,7 @@ def test_algo():
         test_pt = b"Hello AES-128-CBC"
         ct, iv = aes_encrypt(test_pt, test_key, mode='cbc', iv=test_iv)
         dt = aes_decrypt(ct, test_key, mode='cbc', iv=iv)
-        results['AES-128-CBC'] = 'PASS' if dt == test_pt else 'FAIL'
+        results['AES-128-CBC'] = '通过' if dt == test_pt else '失败'
     except Exception as e:
         results['AES-128-CBC'] = str(e)
 
@@ -1423,7 +1524,7 @@ def test_algo():
         dec = rsa_decrypt_bytes(enc, priv)
         sig = rsa_sign(test_data, priv)
         ver = rsa_verify(test_data, sig, pub)
-        results['RSA'] = 'PASS' if dec == test_data and ver else 'FAIL'
+        results['RSA'] = '通过' if dec == test_data and ver else '失败'
     except Exception as e:
         results['RSA'] = str(e)
 
@@ -1433,7 +1534,7 @@ def test_algo():
         bob = DHPeer(bits=256)
         alice.compute_shared_secret(bob.get_public_key())
         bob.compute_shared_secret(alice.get_public_key())
-        results['DH'] = 'PASS' if alice.get_session_key() == bob.get_session_key() else 'FAIL'
+        results['DH'] = '通过' if alice.get_session_key() == bob.get_session_key() else '失败'
     except Exception as e:
         results['DH'] = str(e)
 
