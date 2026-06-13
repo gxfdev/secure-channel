@@ -3,7 +3,7 @@ version: '3.8'
 # 镜像配置 - 从阿里云ACR拉取
 # 如需本地构建，将 image 替换为 build: .
 x-image: &default-image
-  image: ${DOCKER_IMAGE:-registry.cn-hangzhou.aliyuncs.com/gxfdev/grcs:latest}
+  image: ${DOCKER_IMAGE:-crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcs/grcs:latest}
 
 services:
   # ==================== 发送端 ====================
