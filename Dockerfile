@@ -10,6 +10,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tcpdump \
     libpcap-dev \
+    || (echo "apt安装失败，尝试更换源..." \
+        && sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+        && sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends tcpdump libpcap-dev) \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
