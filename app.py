@@ -616,9 +616,10 @@ def start_negotiate_server():
                 conn, addr = server_sock.accept()
                 print(f"  [协商服务器] 收到来自 {addr} 的连接")
 
+                # 先保存之前的状态，ping 不改变状态
+                prev_status = _connection_state['status']
                 _connection_state['peer_ip'] = addr[0]
                 _connection_state['peer_port'] = addr[1]
-                _connection_state['status'] = 'negotiating'
 
                 # 读取协商请求
                 req_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
@@ -629,14 +630,25 @@ def start_negotiate_server():
                 peer_listen_port = req.get('listen_port', LISTEN_PORT)
 
                 if req.get('type') == 'ping':
-                    # 连通性测试，直接回复 pong
+                    # 连通性测试，直接回复 pong，不改变连接状态
                     pong = json.dumps({'type': 'pong', 'mode': MODE, 'listen_port': LISTEN_PORT}).encode()
                     conn.sendall(struct.pack('>I', len(pong)) + pong)
                     conn.close()
-                    _connection_state['status'] = _connection_state.get('status', 'disconnected')
+                    # 恢复之前的状态
+                    _connection_state['status'] = prev_status
                     continue
 
-                elif req.get('type') == 'step2_rsa_pub_exchange':
+                elif req.get('type') == 'data_transfer':
+                    # 数据传输不改变连接状态
+                    if _dh_peer and _dh_peer.get_session_key():
+                        _handle_data_transfer(conn, req)
+                    conn.close()
+                    continue
+
+                # 只有真正的密钥协商才设置状态
+                _connection_state['status'] = 'negotiating'
+
+                if req.get('type') == 'step2_rsa_pub_exchange':
                     # ========== 步骤2: 接收端处理 RSA 公钥交换 ==========
                     # 收到对方的 RSA 公钥，保存并返回自己的 RSA 公钥
                     peer_rsa_e = req['rsa_e']
@@ -739,17 +751,16 @@ def start_negotiate_server():
                         _connection_state['status'] = 'disconnected'
                         print(f"  [接收端] 对方签名验证失败！")
 
-                elif req.get('type') == 'data_transfer':
-                    # 数据传输
-                    if _dh_peer and _dh_peer.get_session_key():
-                        _handle_data_transfer(conn, req)
-
                 conn.close()
 
             except socket.timeout:
                 continue
             except Exception as e:
                 print(f"  [协商服务器] 错误: {e}")
+                try:
+                    conn.close()
+                except:
+                    pass
                 continue
 
     thread = threading.Thread(target=server_thread, daemon=True)
@@ -848,8 +859,13 @@ def api_capture():
     try:
         count = request.json.get('count', 10) if request.is_json else 10
         timeout = request.json.get('timeout', 15) if request.is_json else 15
+        # 支持自定义BPF过滤器，默认捕获所有IP流量
+        filter_rule = request.json.get('filter', 'ip') if request.is_json else 'ip'
+        interface = request.json.get('interface', None) if request.is_json else None
 
-        packets, capture_log = capture_packets(count=count, timeout=timeout)
+        packets, capture_log = capture_packets(count=count, timeout=timeout,
+                                                interface=interface,
+                                                filter_rule=filter_rule)
 
         if not packets:
             return jsonify({'success': False, 'error': '未抓取到任何数据包', 'capture_log': capture_log})
@@ -1085,6 +1101,41 @@ def test_algorithms():
         results['HMAC-SHA256'] = f'ERROR: {e}'
 
     return jsonify(results)
+
+
+@app.route('/api/restart_negotiate', methods=['POST'])
+def restart_negotiate():
+    """重启协商服务器（如果崩溃或端口异常时使用）"""
+    global _negotiate_server_running, _negotiate_server_status
+    _negotiate_server_running = False
+    _negotiate_server_status = {'running': False, 'port': LISTEN_PORT, 'error': None}
+    start_negotiate_server()
+    # 等待一小段时间让服务器启动
+    time.sleep(0.5)
+    return jsonify({
+        'success': True,
+        'negotiate_server': _negotiate_server_status,
+        'message': '协商服务器已重启'
+    })
+
+
+@app.route('/api/reset_connection', methods=['POST'])
+def reset_connection():
+    """重置连接状态（断开当前连接）"""
+    global _dh_peer, _connection_state
+    _dh_peer = None
+    _connection_state = {
+        'status': 'disconnected',
+        'peer_ip': None,
+        'peer_port': None,
+        'tcp_handshake': [],
+        'dh_exchange': [],
+        'session_key': None,
+        'hmac_key': None,
+        'peer_public_key': None,
+        'peer_verified': False,
+    }
+    return jsonify({'success': True, 'message': '连接已重置'})
 
 
 # ==================== 启动 ====================

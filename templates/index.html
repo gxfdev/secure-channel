@@ -143,6 +143,7 @@
                         <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" onclick="checkHealth()">检查本机服务</button>
                         <span id="testResult" class="text-xs text-slate400"></span>
                     </div>
+                    <div id="senderConnStatus" class="mb2 text-sm"></div>
                     <div id="connectResult" class="hidden"></div>
                 </div>
 
@@ -151,6 +152,13 @@
                     <div class="text-sm font-bold mb2">2. 抓取网络数据包</div>
                     <div class="flex gap2 mb2">
                         <input id="captureCount" class="input" style="width:80px" placeholder="数量" value="5">
+                        <select id="captureFilter" class="input" style="width:200px">
+                            <option value="ip">所有IP流量</option>
+                            <option value="tcp">仅TCP流量</option>
+                            <option value="tcp port 9999">仅协商端口(9999)</option>
+                            <option value="tcp port 5000">仅Web端口(5000)</option>
+                            <option value="tcp port 9999 or tcp port 5000">协商+Web端口</option>
+                        </select>
                         <button id="btnCapture" class="btn btn-orange" onclick="doCapture()">抓取数据包</button>
                     </div>
                     <div id="captureResult" class="hidden"></div>
@@ -190,6 +198,8 @@
                         <div id="recvInfo" class="mt2 text-xs text-slate500 hidden"></div>
                     </div>
                     <button class="btn btn-blue btn-sm mt2" onclick="refreshConn()">刷新状态</button>
+                    <button class="btn btn-orange btn-sm mt2" onclick="restartNegotiate()">重启协商服务器</button>
+                    <button class="btn btn-red btn-sm mt2" onclick="resetConnection()">断开连接</button>
                 </div>
 
                 <div class="mb4">
@@ -400,16 +410,25 @@ function updateConnUI(c) {
         connected:{cls:'st-conn',lbl:'已连接'}
     };
     var s = map[c.status]||map.disconnected;
-    document.getElementById('recvDot').className = 'status-dot '+s.cls;
-    document.getElementById('recvText').textContent = s.lbl;
+    // 更新接收端面板状态
+    var recvDot = document.getElementById('recvDot');
+    var recvText = document.getElementById('recvText');
+    if (recvDot) recvDot.className = 'status-dot '+s.cls;
+    if (recvText) recvText.textContent = s.lbl;
     var ri = document.getElementById('recvInfo');
     if (c.peer_ip) {
         ri.classList.remove('hidden');
         ri.innerHTML = '对方: '+c.peer_ip+':'+(c.peer_listen_port||c.peer_port||'')+'<br>'+
-            (c.session_key?'会话密钥: '+c.session_key:'');
+            (c.session_key?'会话密钥: '+c.session_key.substring(0,16)+'...':'');
     }
+    // 更新发送端面板：连接成功后启用发送按钮
     var btn = document.getElementById('btnSend');
     if (btn) btn.disabled = (c.status !== 'connected');
+    // 发送端面板也显示连接状态
+    var senderStatus = document.getElementById('senderConnStatus');
+    if (senderStatus) {
+        senderStatus.innerHTML = '<span class="status-dot '+s.cls+'"></span> <span style="color:'+(c.status==='connected'?'#4ade80':'#94a3b8')+'">'+s.lbl+'</span>';
+    }
 }
 
 // ==================== 发送端操作 ====================
@@ -436,11 +455,13 @@ async function doConnect() {
 
 async function doCapture() {
     var count = parseInt(document.getElementById('captureCount').value)||5;
+    var filterEl = document.getElementById('captureFilter');
+    var filter = filterEl ? filterEl.value : 'ip';
     var btn = document.getElementById('btnCapture');
     btn.disabled=true; btn.textContent='抓取中...';
-    log('开始抓取 '+count+' 个数据包...','info');
+    log('开始抓取 '+count+' 个数据包 (过滤器: '+filter+')...','info');
     try {
-        var resp = await fetch('/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:count,timeout:20})});
+        var resp = await fetch('/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:count,timeout:20,filter:filter})});
         var r = await resp.json();
         if (r.success) {
             capturedData = r.json_data;
@@ -593,11 +614,35 @@ async function checkHealth() {
     } catch(e) { el.textContent = '检查失败'; el.style.color = '#f87171'; log('检查失败: '+e.message,'error'); }
 }
 
-// 定时刷新连接状态
+async function restartNegotiate() {
+    log('重启协商服务器...','info');
+    try {
+        var resp = await fetch('/api/restart_negotiate',{method:'POST'});
+        var r = await resp.json();
+        if (r.success) { log('协商服务器已重启: '+JSON.stringify(r.negotiate_server),'success'); }
+        else { log('重启失败: '+(r.error||''),'error'); }
+        refreshConn();
+    } catch(e) { log('重启失败: '+e.message,'error'); }
+}
+
+async function resetConnection() {
+    log('重置连接...','info');
+    try {
+        var resp = await fetch('/api/reset_connection',{method:'POST'});
+        var r = await resp.json();
+        log(r.message,'success');
+        refreshConn();
+    } catch(e) { log('重置失败: '+e.message,'error'); }
+}
+
+// 定时刷新连接状态（接收端和发送端都刷新）
 setInterval(function() {
     refreshConn();
-    if (currentMode === 'receiver' && sysInfo.connection && sysInfo.connection.status === 'connected') refreshRecv();
-}, 3000);
+    // 接收端：任何状态都刷新，特别是 negotiating 时让用户看到变化
+    if (currentMode === 'receiver') {
+        refreshRecv();
+    }
+}, 2000);
 
 loadInfo();
 </script>
