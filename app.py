@@ -65,6 +65,7 @@ _connection_state = {
 _received_data = []
 _key_files = {'pub': None, 'priv': None}
 _negotiate_server_status = {'running': False, 'port': None, 'error': None}
+_negotiate_steps = []  # 接收端协商过程可视化步骤
 
 
 def get_rsa_keys():
@@ -823,7 +824,29 @@ def start_negotiate_server():
 
                 # 只有真正的密钥协商才设置状态
                 _connection_state['status'] = 'negotiating'
+                _negotiate_steps = []  # 重置协商步骤
                 print(f"  [协商服务器] 开始密钥协商流程...")
+
+                # 步骤1: TCP连接已建立
+                _negotiate_steps.append({
+                    'id': 1,
+                    'title': '步骤1: TCP 三次握手',
+                    'status': 'success',
+                    'description': '发送端发起TCP连接，三次握手完成，可靠连接已建立',
+                    'detail': {
+                        '连接参数': {
+                            '发送端(对方)': f'{addr[0]}:{addr[1]}',
+                            '接收端(本机)': f'{_get_local_ip()}:{LISTEN_PORT}',
+                            '协议': 'TCP (Transmission Control Protocol)',
+                        },
+                        '握手过程': [
+                            ('SYN →', '对方发起连接请求', 'seq=随机'),
+                            ('← SYN+ACK', '本机确认并发起连接', 'seq=随机, ack=seq+1'),
+                            ('ACK →', '对方确认连接', '连接正式建立'),
+                        ],
+                        '含义': '三次握手保证双方收发能力正常，连接可靠'
+                    }
+                })
 
                 if req.get('type') == 'step2_rsa_pub_exchange':
                     # ========== 步骤2: 接收端处理 RSA 公钥交换 ==========
@@ -838,6 +861,27 @@ def start_negotiate_server():
 
                     my_rsa_pub = get_rsa_keys()[0]
                     print(f"  [接收端-步骤2] RSA公钥交换完成")
+
+                    _negotiate_steps.append({
+                        'id': 2,
+                        'title': '步骤2: 交换 RSA 公钥',
+                        'status': 'success',
+                        'description': '收到发送端RSA公钥，返回自己的RSA公钥',
+                        'detail': {
+                            '收到的对方RSA公钥': {
+                                'e (指数)': str(peer_rsa_e),
+                                'n (模数)': str(peer_rsa_n)[:64] + f"... ({peer_rsa_n.bit_length()}位)",
+                                '说明': '用此公钥验证对方DH公钥的签名'
+                            },
+                            '我发送的RSA公钥': {
+                                'e (指数)': str(my_rsa_pub[0]),
+                                'n (模数)': str(my_rsa_pub[1])[:64] + f"... ({my_rsa_pub[1].bit_length()}位)",
+                                '说明': '对方用此公钥验证我的DH公钥签名'
+                            },
+                            '交换方向': '对方 → 我：对方RSA公钥 | 我 → 对方：我的RSA公钥',
+                            '用途': '后续步骤中，双方用收到的对方RSA公钥来验证对方DH公钥的数字签名'
+                        }
+                    })
 
                     # 返回自己的 RSA 公钥
                     step2_resp = json.dumps({
@@ -870,6 +914,31 @@ def start_negotiate_server():
 
                     print(f"  [接收端-步骤3] DH公钥交换完成")
 
+                    _negotiate_steps.append({
+                        'id': 3,
+                        'title': '步骤3: 交换 DH 公钥（带 RSA 数字签名）',
+                        'status': 'success',
+                        'description': '收到对方签名的DH公钥，生成自己的DH密钥对并签名后发送',
+                        'detail': {
+                            '收到的对方DH公钥+签名': {
+                                '对方DH公钥': hex(peer_dh_public),
+                                '对方DH公钥签名': peer_dh_signature.hex()[:64] + '...',
+                                '说明': '下一步将用对方RSA公钥验证此签名'
+                            },
+                            '我生成的DH密钥对': {
+                                'DH私钥(保密)': hex(_dh_peer.private_key)[:40] + '...',
+                                'DH公钥(将发送)': hex(my_dh_public),
+                                '说明': 'DH私钥绝不外泄，只有我知道'
+                            },
+                            '我对DH公钥的RSA签名': {
+                                '签名值': my_signature.hex()[:64] + '...',
+                                '签名算法': 'SHA256(DH公钥) → RSA私钥加密哈希值',
+                                '作用': '证明这个DH公钥确实来自我（不可否认性）'
+                            },
+                            '交换方向': '对方 → 我：对方DH公钥+对方RSA签名 | 我 → 对方：我的DH公钥+我的RSA签名'
+                        }
+                    })
+
                     step3_resp = json.dumps({
                         'type': 'step3_dh_key_exchange',
                         'dh_public': hex(my_dh_public),
@@ -879,10 +948,58 @@ def start_negotiate_server():
 
                     # ========== 步骤4: 验证对方签名 ==========
                     peer_dh_public_bytes = peer_dh_public.to_bytes((peer_dh_public.bit_length() + 7) // 8, 'big')
+
+                    # 详细调试信息
+                    from sha256 import sha256 as _sha256_dbg
+                    actual_hash_dbg = int.from_bytes(_sha256_dbg(peer_dh_public_bytes), 'big')
+                    recovered_hash_dbg = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
+                    sig_match = (actual_hash_dbg == recovered_hash_dbg)
+
                     peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
                     _connection_state['peer_verified'] = peer_verified
 
                     print(f"  [接收端-步骤4] 签名验证: {'通过' if peer_verified else '失败'}")
+
+                    if peer_verified:
+                        _negotiate_steps.append({
+                            'id': 4,
+                            'title': '步骤4: 验证对方签名',
+                            'status': 'success',
+                            'description': '用对方RSA公钥验证对方DH公钥的数字签名 — 通过',
+                            'detail': {
+                                '验证对象': '对方发送的 DH 公钥 + 对方的 RSA 数字签名',
+                                '验证方法': [
+                                    '① 计算 SHA256(对方DH公钥) → 得到哈希值 H',
+                                    '② 用对方RSA公钥解密签名 → 得到 H\'',
+                                    '③ 比较 H == H\' ?'
+                                ],
+                                '验证结果': '通过 ✓',
+                                '实际哈希值(H)': hex(actual_hash_dbg),
+                                '从签名恢复的哈希值(H\')': hex(recovered_hash_dbg),
+                                '含义': '对方的 DH 公钥确实是用对方的 RSA 私钥签名的，真实可信',
+                                '安全性': '即使有人截获并篡改了 DH 公钥，没有私钥也无法伪造有效签名'
+                            }
+                        })
+                    else:
+                        _negotiate_steps.append({
+                            'id': 4,
+                            'title': '步骤4: 验证对方签名',
+                            'status': 'error',
+                            'description': '用对方RSA公钥验证对方DH公钥的数字签名 — 失败！',
+                            'detail': {
+                                '验证结果': '失败 ✗',
+                                '错误原因': '对方DH公钥的签名无法用其RSA公钥验证通过',
+                                '可能原因': [
+                                    '中间人攻击：有人篡改了DH公钥或签名',
+                                    '传输过程中数据损坏',
+                                    '对方使用了错误的RSA密钥对'
+                                ],
+                                '安全警告': '继续使用可能导致会话密钥泄露！连接已终止。'
+                            }
+                        })
+                        _connection_state['status'] = 'disconnected'
+                        conn.close()
+                        continue
 
                     if peer_verified:
                         # ========== 步骤5: 计算共享会话密钥 ==========
@@ -893,6 +1010,30 @@ def start_negotiate_server():
                         _connection_state['session_key'] = session_key.hex()
                         _connection_state['hmac_key'] = hmac_key.hex()
                         _connection_state['status'] = 'connected'
+
+                        _negotiate_steps.append({
+                            'id': 5,
+                            'title': '步骤5: 计算共享会话密钥',
+                            'status': 'success',
+                            'description': '双方利用DH算法独立计算出相同的共享密钥，派生AES加密密钥和HMAC认证密钥',
+                            'detail': {
+                                'DH共享秘密计算': {
+                                    '公式': 'shared_secret = 对方DH公钥 ^ 本方DH私钥 mod p',
+                                    '数学原理': '(g^b)^a mod p = (g^a)^b mod p = g^(ab) mod p',
+                                    '安全性': '即使窃听到双方的DH公钥，没有私钥也无法计算出共享秘密（离散对数难题）'
+                                },
+                                '密钥派生(SHA-256)': {
+                                    '输入': f'DH共享秘密({_dh_peer.shared_secret.bit_length()}位)',
+                                    '输出(32字节)': '前16字节 = AES-128-CBC密钥 | 后16字节 = HMAC-SHA256密钥',
+                                    'AES会话密钥': session_key.hex(),
+                                    'HMAC认证密钥': hmac_key.hex()
+                                },
+                                '最终结果': {
+                                    '状态': '连接已建立 ✓',
+                                    '可用操作': ['接收加密数据(AES+HMAC+RSA签名)', '自动解密验证']
+                                }
+                            }
+                        })
 
                         print(f"  [接收端-步骤5] 会话密钥生成完成 ✓ 连接已建立!")
                     else:
@@ -1336,7 +1477,9 @@ def get_data_file(filename):
 
 @app.route('/api/connection_status')
 def connection_status():
-    return jsonify(_connection_state)
+    result = dict(_connection_state)
+    result['negotiate_steps'] = _negotiate_steps
+    return jsonify(result)
 
 
 # ==================== 算法测试 API ====================

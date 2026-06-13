@@ -211,6 +211,11 @@
                 </div>
 
                 <div class="mb4">
+                    <div class="text-sm font-bold mb2">密钥协商过程</div>
+                    <div id="recvNegotiateSteps"><div class="text-sm text-slate500" style="text-align:center;padding:16px 0">等待发送端连接后显示协商过程...</div></div>
+                </div>
+
+                <div class="mb4">
                     <div class="flex items-center justify-between mb2">
                         <div class="text-sm font-bold">接收到的数据</div>
                         <button class="btn btn-blue btn-sm" onclick="refreshRecv()">刷新</button>
@@ -254,16 +259,38 @@ function hide(id) { document.getElementById(id).classList.add('hidden'); }
 
 function esc(s) { var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
+// 渲染步骤卡片（通用，发送端+接收端共用）
+function renderStepCard(step) {
+    var statusIcon = step.status==='success'?'&#10004;':step.status==='error'?'&#10008;':'&#8987;';
+    var statusColor = step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6';
+    var statusText = step.status==='success'?'通过':step.status==='error'?'失败':'进行中';
+    var borderClr = step.status==='success'?'#065f46':step.status==='error'?'#7f1d1d':'#1e40af';
+    var html = '<div class="step-card" style="border-color:'+borderClr+'">';
+    html += '<div class="flex items-center gap2 mb2">';
+    html += '<span class="step-num" style="background:'+statusColor+'">'+step.id+'</span>';
+    html += '<span class="font-bold text-sm">'+esc(step.title)+'</span>';
+    html += '<span style="color:'+statusColor+';font-weight:700;font-size:13px;margin-left:auto">'+statusIcon+' '+statusText+'</span>';
+    html += '</div>';
+    html += '<div class="text-xs text-slate400 mb2">'+esc(step.description||'')+'</div>';
+    if (step.detail) {
+        html += renderDetail(step.detail, 0);
+    }
+    html += '</div>';
+    return html;
+}
+
 // 渲染嵌套详情（支持对象、数组、元组）
-function renderDetail(detail) {
+function renderDetail(detail, depth) {
     if (!detail) return '';
+    depth = depth || 0;
     var html = '';
     for (var k in detail) {
         var v = detail[k];
         if (typeof v === 'object' && !Array.isArray(v) && v !== null) {
-            html += '<div style="margin:6px 0 6px 12px;border-left:2px solid #3b82f6;padding-left:10px">';
-            html += '<div style="color:#60a5fa;font-weight:600;font-size:12px;margin-bottom:4px">'+esc(k)+'</div>';
-            html += renderDetail(v);
+            var sectionColor = ['#60a5fa','#f59e0b','#4ade80','#c084fc','#f87171'][depth % 5];
+            html += '<div style="margin:8px 0 4px 12px;border-left:3px solid '+sectionColor+';padding:6px 10px;background:'+sectionColor+'08;border-radius:0 6px 6px 0">';
+            html += '<div style="color:'+sectionColor+';font-weight:700;font-size:12px;margin-bottom:4px">'+esc(k)+'</div>';
+            html += renderDetail(v, depth+1);
             html += '</div>';
         } else if (Array.isArray(v)) {
             html += '<div class="data-row"><span class="data-key" style="color:#f59e0b">'+esc(k)+'</span><span class="data-val">';
@@ -275,14 +302,26 @@ function renderDetail(detail) {
                     if (v[i][2]) html += ' <span style="color:#64748b;font-size:11px">('+esc(String(v[i][2]))+')</span>';
                     html += '</div>';
                 } else if (typeof v[i] === 'string') {
-                    html += '<div>'+esc(v[i])+'</div>';
+                    html += '<div style="padding:2px 0;color:#e2e8f0">'+esc(v[i])+'</div>';
                 } else {
                     html += '<div>'+esc(String(v[i]))+'</div>';
                 }
             }
             html += '</span></div>';
         } else {
-            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val">'+esc(String(v))+'</span></div>';
+            var val = String(v);
+            // 检测hex值/密钥/哈希，用等宽字体+颜色
+            var isHex = /^[0-9a-f]{16,}$/i.test(val);
+            var isKey = k.indexOf('密钥')>=0 || k.indexOf('key')>=0 || k.indexOf('Key')>=0;
+            var isHash = k.indexOf('哈希')>=0 || k.indexOf('hash')>=0 || k.indexOf('Hash')>=0 || k.indexOf('HMAC')>=0 || k.indexOf('签名')>=0;
+            var isResult = k.indexOf('结果')>=0 || k.indexOf('验证')>=0;
+            var valStyle = 'font-family:monospace;';
+            if (isKey || isHex) valStyle += 'color:#4ade80;font-size:11px;word-break:break-all;';
+            else if (isHash) valStyle += 'color:#fbbf24;font-size:11px;word-break:break-all;';
+            else if (isResult && val.indexOf('通过')>=0) valStyle += 'color:#4ade80;font-weight:700;';
+            else if (isResult && val.indexOf('失败')>=0) valStyle += 'color:#f87171;font-weight:700;';
+            else valStyle += 'color:#e2e8f0;';
+            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val" style="'+valStyle+'">'+esc(val)+'</span></div>';
         }
     }
     return html;
@@ -384,22 +423,7 @@ function applyModeUI(mode) {
 function renderConnect(r) {
     var html = '';
     (r.steps||[]).forEach(function(step) {
-        var statusIcon = step.status==='success'?'&#10004;':step.status==='error'?'&#10008;':'&#8987;';
-        var statusColor = step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6';
-        var statusText = step.status==='success'?'通过':step.status==='error'?'失败':'进行中';
-        var borderClr = step.status==='success'?'#065f46':step.status==='error'?'#7f1d1d':'#1e40af';
-
-        html += '<div class="step-card" style="border-color:'+borderClr+'">';
-        html += '<div class="flex items-center gap2 mb2">';
-        html += '<span class="step-num" style="background:'+statusColor+'">'+step.id+'</span>';
-        html += '<span class="font-bold text-sm">'+esc(step.title)+'</span>';
-        html += '<span style="color:'+statusColor+';font-weight:700;font-size:13px;margin-left:auto">'+statusIcon+' '+statusText+'</span>';
-        html += '</div>';
-        html += '<div class="text-xs text-slate400 mb2">'+esc(step.description||'')+'</div>';
-        if (step.detail) {
-            html += renderDetail(step.detail);
-        }
-        html += '</div>';
+        html += renderStepCard(step);
     });
     document.getElementById('connectResult').innerHTML = html;
 }
@@ -651,6 +675,17 @@ async function refreshConn() {
         var c = await resp.json();
         updateConnUI(c);
         log('连接状态: '+c.status,'info');
+        // 接收端：渲染协商步骤
+        if (c.negotiate_steps && c.negotiate_steps.length > 0) {
+            var el = document.getElementById('recvNegotiateSteps');
+            if (el) {
+                var html = '';
+                c.negotiate_steps.forEach(function(step) {
+                    html += renderStepCard(step);
+                });
+                el.innerHTML = html;
+            }
+        }
     } catch(e) { log('刷新失败: '+e.message,'error'); }
 }
 
