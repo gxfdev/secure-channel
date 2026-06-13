@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.2.0'
+APP_VERSION = '2.3.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -464,7 +464,9 @@ def set_rsa_keys():
 
 @app.route('/api/set_dh_keys', methods=['POST'])
 def set_dh_keys():
-    """Set custom DH private key. Frontend specifies private_key; backend computes public_key in real-time."""
+    """自定义DH密钥。用户指定私钥，后端自动计算公钥: A = g^a mod p。
+    DH原理: 私钥a随机选取 → 公钥A = g^a mod p → 共享秘密 s = B^a mod p
+    """
     global _dh_peer
     try:
         data = request.get_json() or {}
@@ -473,38 +475,64 @@ def set_dh_keys():
         generator_val = data.get('generator')
 
         if private_key_val is None:
-            return jsonify({'success': False, 'error': '必须提供 private_key 值'})
+            return jsonify({'success': False, 'error': '必须提供私钥值'})
 
         pk_str = str(private_key_val)
-        if pk_str.startswith('0x') or pk_str.startswith('0X'):
-            pk_int = int(pk_str, 16)
+        pk_int = int(pk_str, 16) if pk_str.startswith('0x') or pk_str.startswith('0X') else int(pk_str)
+
+        corrections = []
+
+        # 解析素数 p
+        if prime_val is not None:
+            p_str = str(prime_val)
+            p_int = int(p_str, 16) if p_str.startswith('0x') or p_str.startswith('0X') else int(p_str)
+            if p_int <= 2:
+                return jsonify({'success': False, 'error': '素数 p 必须大于2'})
         else:
-            pk_int = int(pk_str)
-        p_int = int(str(prime_val), 16) if prime_val else None
-        g_str = str(generator_val) if generator_val else None
-        if g_str:
-            if g_str.startswith('0x') or g_str.startswith('0X'):
-                g_int = int(g_str, 16)
-            else:
-                g_int = int(g_str)
+            p_int = None
+
+        # 解析生成元 g
+        if generator_val is not None:
+            g_str = str(generator_val)
+            g_int = int(g_str, 16) if g_str.startswith('0x') or g_str.startswith('0X') else int(g_str)
         else:
             g_int = None
 
         if pk_int <= 0:
             return jsonify({'success': False, 'error': 'DH 私钥必须是正整数'})
 
+        # 创建DH实例
         _dh_peer = DHPeer(bits=256, prime=p_int, generator=g_int)
+
+        # 验证私钥范围: 1 < 私钥 < p-1
+        if pk_int >= _dh_peer.p - 1:
+            old_pk = pk_int
+            pk_int = _dh_peer.p - 2
+            corrections.append(f'私钥={old_pk} 过大（必须小于 p-1），已自动纠正为 {pk_int}')
+
+        if pk_int <= 1:
+            return jsonify({'success': False, 'error': 'DH 私钥必须大于1'})
+
+        # 设置私钥，自动计算公钥: A = g^a mod p（公钥由私钥计算得出）
         _dh_peer.private_key = pk_int
         _dh_peer.public_key = pow(_dh_peer.g, _dh_peer.private_key, _dh_peer.p)
         _save_dh_keys()
 
-        return jsonify({
+        result = {
             'success': True,
             'message': 'DH 密钥已更新',
+            'corrections': corrections,
+            'calculation': {
+                '私钥 a': hex(_dh_peer.private_key),
+                '生成元 g': _dh_peer.g,
+                '素数 p 位数': _dh_peer.p.bit_length(),
+                '公钥 A = g^a mod p': hex(_dh_peer.public_key),
+            },
             'private_key': hex(_dh_peer.private_key),
             'public_key': hex(_dh_peer.public_key),
             'prime_bits': _dh_peer.p.bit_length(),
-        })
+        }
+        return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
