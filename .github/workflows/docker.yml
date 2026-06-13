@@ -15,15 +15,21 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # ========== 调试步骤：打印 Secrets 信息（不泄露密码原文） ==========
+      # ========== 调试：验证 Secrets 是否存在 ==========
       - name: 调试 Secrets
         run: |
-          echo "ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}"
-          echo "ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}"
+          echo "=== Secrets 调试信息 ==="
+          echo "ALIYUN_REGISTRY: '${{ secrets.ALIYUN_REGISTRY }}'"
+          echo "ALIYUN_USERNAME: '${{ secrets.ALIYUN_USERNAME }}'"
+          echo "ALIYUN_NAMESPACE: '${{ secrets.ALIYUN_NAMESPACE }}'"
           echo -n "ALIYUN_PASSWORD length: "
           echo -n "${{ secrets.ALIYUN_PASSWORD }}" | wc -c
-          echo "ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}"
-      # ===============================================================
+          echo ""
+          echo "=== 验证 registry 可达性 ==="
+          curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" "https://${{ secrets.ALIYUN_REGISTRY }}/v2/" || echo "无法连接到 registry"
+          echo ""
+          echo "=== 尝试直接 docker login ==="
+          echo "${{ secrets.ALIYUN_PASSWORD }}" | docker login "${{ secrets.ALIYUN_REGISTRY }}" -u "${{ secrets.ALIYUN_USERNAME }}" --password-stdin 2>&1 || true
 
       - name: 登录阿里云ACR
         uses: docker/login-action@v3
@@ -31,7 +37,6 @@ jobs:
           registry: ${{ secrets.ALIYUN_REGISTRY }}
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
-        continue-on-error: false
 
       - name: 提取 Docker 元数据
         id: meta
