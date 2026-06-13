@@ -468,26 +468,44 @@ def packets_to_json(packets_info):
 
 
 def get_network_info():
-    """获取本机网络信息"""
+    """获取本机网络信息（自动识别真实IP，不依赖DNS）"""
     info = {
         "hostname": socket.gethostname(),
         "interfaces": []
     }
-    try:
-        info["ip_address"] = socket.gethostbyname(info["hostname"])
-    except:
-        info["ip_address"] = "127.0.0.1"
 
+    # 方法1: UDP socket trick — 获取出站IP（最可靠，不需要真的发包）
+    outbound_ip = None
+    for target in ['8.8.8.8', '1.1.1.1', '192.168.1.1', '10.0.0.1']:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1)
+            s.connect((target, 80))
+            outbound_ip = s.getsockname()[0]
+            s.close()
+            break
+        except:
+            try: s.close()
+            except: pass
+            continue
+
+    info["ip_address"] = outbound_ip or "127.0.0.1"
+
+    # 方法2: 遍历所有网卡获取IP列表
     try:
-        addrs = socket.getaddrinfo(info["hostname"], None)
+        addrs = socket.getaddrinfo(socket.gethostname(), None)
         seen = set()
         for addr in addrs:
             ip = addr[4][0]
-            if ip not in seen:
+            if ip not in seen and not ip.startswith('127.'):
                 seen.add(ip)
                 info["interfaces"].append(ip)
     except:
         pass
+
+    # 如果interfaces为空，把ip_address加进去
+    if not info["interfaces"] and info["ip_address"] != "127.0.0.1":
+        info["interfaces"].append(info["ip_address"])
 
     # scapy 接口信息
     if HAS_SCAPY:

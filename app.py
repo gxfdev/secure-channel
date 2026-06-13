@@ -173,18 +173,21 @@ def health_check():
     # 网络诊断信息
     try:
         result['network_debug']['hostname'] = socket.gethostname()
-        try:
-            result['network_debug']['ip'] = socket.gethostbyname(socket.gethostname())
-        except:
-            result['network_debug']['ip'] = 'DNS失败'
-        # 获取所有网卡IP
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(('8.8.8.8', 80))
-            result['network_debug']['outbound_ip'] = s.getsockname()[0]
-            s.close()
-        except:
-            result['network_debug']['outbound_ip'] = '无法获取'
+        # UDP trick获取真实IP
+        outbound_ip = '127.0.0.1'
+        for target in ['8.8.8.8', '1.1.1.1', '192.168.1.1', '10.0.0.1']:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(1)
+                s.connect((target, 80))
+                outbound_ip = s.getsockname()[0]
+                s.close()
+                break
+            except:
+                try: s.close()
+                except: pass
+        result['network_debug']['ip'] = outbound_ip
+        result['network_debug']['outbound_ip'] = outbound_ip
     except:
         pass
 
@@ -325,7 +328,19 @@ def api_connect():
         # ================================================================
         # 步骤 1: TCP 三次握手
         # ================================================================
-        local_ip = socket.gethostbyname(socket.gethostname())
+        # 获取本机真实IP（不依赖DNS，UDP trick不需要真的发包）
+        local_ip = '127.0.0.1'
+        for _target in ['8.8.8.8', '1.1.1.1', '192.168.1.1', '10.0.0.1']:
+            try:
+                _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                _s.settimeout(1)
+                _s.connect((_target, 80))
+                local_ip = _s.getsockname()[0]
+                _s.close()
+                break
+            except:
+                try: _s.close()
+                except: pass
         local_port = random.randint(40000, 60000)
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
