@@ -31,6 +31,7 @@ jobs:
           registry: ${{ secrets.ALIYUN_REGISTRY }}
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
+        continue-on-error: false
 
       - name: 提取 Docker 元数据
         id: meta
