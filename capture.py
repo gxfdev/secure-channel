@@ -454,10 +454,10 @@ def capture_packets_socket(count=5, timeout=10):
     return packets_info, capture_log
 
 
-def capture_packets(count=10, timeout=15, interface=None):
+def capture_packets(count=10, timeout=15, interface=None, filter_rule="ip"):
     """抓取网络数据包，返回 (packets, capture_log)"""
     if HAS_SCAPY:
-        return capture_packets_scapy(count=count, timeout=timeout, interface=interface)
+        return capture_packets_scapy(count=count, timeout=timeout, interface=interface, filter_rule=filter_rule)
     else:
         return capture_packets_socket(count=count, timeout=timeout)
 
