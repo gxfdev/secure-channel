@@ -179,13 +179,18 @@ def test_tcp():
         port = int(data.get('port', LISTEN_PORT))
         results = []
 
-        # 1. DNS 解析测试
-        try:
-            resolved_ip = socket.gethostbyname(host)
-            results.append({'step': 'DNS解析', 'ok': True, 'detail': f'{host} → {resolved_ip}'})
-        except Exception as e:
-            results.append({'step': 'DNS解析', 'ok': False, 'detail': str(e)})
-            return jsonify({'success': False, 'results': results, 'error': 'DNS解析失败'})
+        # 1. DNS 解析测试（如果是IP地址则跳过）
+        import re
+        is_ip = re.match(r'^\d+\.\d+\.\d+\.\d+$', host)
+        if is_ip:
+            results.append({'step': 'DNS解析', 'ok': True, 'detail': f'{host} 是IP地址，无需DNS解析'})
+        else:
+            try:
+                resolved_ip = socket.gethostbyname(host)
+                results.append({'step': 'DNS解析', 'ok': True, 'detail': f'{host} → {resolved_ip}'})
+            except Exception as e:
+                results.append({'step': 'DNS解析', 'ok': False, 'detail': str(e)})
+                return jsonify({'success': False, 'results': results, 'error': 'DNS解析失败'})
 
         # 2. ICMP ping 测试（尝试连接）
         start = time.time()
