@@ -611,10 +611,31 @@ async function refreshRecv() {
         if (r.count===0) { el.innerHTML='<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div>'; return; }
         var html = '';
         r.data.forEach(function(item,i) {
-            if (item.hmac_valid) {
+            // 如果有steps，用步骤卡片渲染解密过程
+            if (item.steps && item.steps.length > 0) {
+                var allOk = item.hmac_valid && item.sig_verified;
+                html += '<div class="step-card" style="border-color:'+(allOk?'#10b981':'#ef4444')+'"><div class="flex items-center gap2 mb2"><span class="step-num" style="background:'+(allOk?'#10b981':'#ef4444')+'">'+(i+1)+'</span><span class="font-bold text-sm" style="color:'+(allOk?'#4ade80':'#f87171')+'">'+(allOk?'解密成功':'解密失败')+'</span><span class="text-xs text-slate500">'+esc(item.time)+'</span></div>';
+                item.steps.forEach(function(s) {
+                    var sc = s.status==='success'?'#10b981':s.status==='error'?'#ef4444':'#3b82f6';
+                    html += '<div style="margin:8px 0;padding:8px 12px;border-left:3px solid '+sc+';background:'+sc+'11;border-radius:0 6px 6px 0">';
+                    html += '<div class="flex items-center gap2 mb1"><span class="step-num" style="background:'+sc+';width:20px;height:20px;font-size:10px">'+s.id+'</span><span class="font-bold text-sm">'+esc(s.title)+'</span></div>';
+                    html += '<div class="text-xs text-slate400 mb1">'+esc(s.description||'')+'</div>';
+                    if (s.data) {
+                        Object.keys(s.data).forEach(function(k) {
+                            var val = String(s.data[k]);
+                            var valColor = val.indexOf('通过')>=0?'#4ade80':val.indexOf('失败')>=0?'#f87171':'#e2e8f0';
+                            var isLong = val.length > 80;
+                            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val font-mono" style="color:'+valColor+';'+(isLong?'word-break:break-all;font-size:10px':'')+'">'+esc(val)+'</span></div>';
+                        });
+                    }
+                    html += '</div>';
+                });
+                html += '</div>';
+            } else if (item.hmac_valid) {
+                // 兼容旧数据
                 var decData = item.decrypted_data || '';
                 var shortData = decData.length > 500 ? decData.substring(0,500) + '...(共'+decData.length+'字符)' : decData;
-                html += '<div class="step-card"><div class="flex items-center gap2 mb2"><span class="step-num">'+(i+1)+'</span><span class="font-bold text-sm text-green400">验证通过</span><span class="text-xs text-slate500">'+esc(item.time)+'</span></div><div class="data-row"><span class="data-key">HMAC验证</span><span class="data-val" style="color:#10b981">通过 (完整性)</span></div><div class="data-row"><span class="data-key">RSA签名验证</span><span class="data-val" style="color:#10b981">'+(item.sig_verified?'通过 (真实性)':'未验证')+'</span></div><div class="data-row"><span class="data-key">解密数据</span><span class="data-val" style="white-space:pre-wrap;max-height:300px;overflow-y:auto;display:block">'+esc(shortData)+'</span></div><div class="data-row"><span class="data-key">数据长度</span><span class="data-val">'+decData.length+' 字符</span></div><div class="data-row"><span class="data-key">保存文件</span><span class="data-val" style="color:#94a3b8;font-size:10px">'+esc(item.saved_to||'未保存')+'</span></div><div class="data-row"><span class="data-key">会话密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(item.session_key_hex||'-')+'</span></div><div class="data-row"><span class="data-key">HMAC密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(item.hmac_key_hex||'-')+'</span></div><div class="data-row"><span class="data-key">IV</span><span class="data-val font-mono" style="color:#94a3b8">'+esc(item.iv_hex||'-')+'</span></div><div class="data-row"><span class="data-key">HMAC值</span><span class="data-val font-mono" style="color:#94a3b8">'+esc(item.hmac_value||'-')+'</span></div></div>';
+                html += '<div class="step-card"><div class="flex items-center gap2 mb2"><span class="step-num">'+(i+1)+'</span><span class="font-bold text-sm text-green400">验证通过</span><span class="text-xs text-slate500">'+esc(item.time)+'</span></div><div class="data-row"><span class="data-key">HMAC验证</span><span class="data-val" style="color:#10b981">通过 (完整性)</span></div><div class="data-row"><span class="data-key">RSA签名验证</span><span class="data-val" style="color:#10b981">'+(item.sig_verified?'通过 (真实性)':'未验证')+'</span></div><div class="data-row"><span class="data-key">解密数据</span><span class="data-val" style="white-space:pre-wrap;max-height:300px;overflow-y:auto;display:block">'+esc(shortData)+'</span></div><div class="data-row"><span class="data-key">数据长度</span><span class="data-val">'+decData.length+' 字符</span></div><div class="data-row"><span class="data-key">保存文件</span><span class="data-val" style="color:#94a3b8;font-size:10px">'+esc(item.saved_to||'未保存')+'</span></div><div class="data-row"><span class="data-key">会话密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(item.session_key_hex||'-')+'</span></div><div class="data-row"><span class="data-key">HMAC密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(item.hmac_key_hex||'-')+'</span></div></div>';
             } else {
                 html += '<div class="step-card" style="border-color:#ef4444"><div class="flex items-center gap2 mb2"><span class="step-num" style="background:#ef4444">'+(i+1)+'</span><span class="font-bold text-sm text-red400">验证失败</span></div><div class="text-red400 text-sm">'+esc(item.error||'HMAC验证失败')+'</div></div>';
             }

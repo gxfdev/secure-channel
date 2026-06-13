@@ -925,7 +925,7 @@ def start_negotiate_server():
 
 
 def _handle_data_transfer(conn, req):
-    """处理数据传输（含 RSA 签名验证）"""
+    """处理数据传输（含 RSA 签名验证），可视化解密过程"""
     global _received_data
     try:
         session_key = _dh_peer.get_session_key()
@@ -947,42 +947,100 @@ def _handle_data_transfer(conn, req):
         from network import unpack_packet
         ct, _, _, recv_iv, recv_hmac = unpack_packet(encrypted_packet)
 
-        # RSA 签名验证（不可否认性 + 真实性）
-        sig_verified = rsa_verify(ct, signature, _connection_state.get('peer_public_key_raw', get_rsa_keys()[0]))
+        # 构建可视化步骤
+        steps = []
 
-        # HMAC 验证（完整性）
+        # 步骤1: 接收加密数据
+        steps.append({
+            'id': 1, 'title': '接收加密数据包',
+            'description': '从TCP连接中读取发送端传来的加密数据包和数字签名',
+            'data': {
+                '加密数据包长度': f'{data_len} 字节',
+                '密文长度': f'{len(ct)} 字节',
+                '签名长度': f'{sig_len} 字节',
+                '发送端IP': _connection_state.get('peer_ip', '未知'),
+            }
+        })
+
+        # 步骤2: HMAC验证
         computed_hmac = hmac_sha256(hmac_key, ct)
         hmac_valid = (computed_hmac == recv_hmac)
+        steps.append({
+            'id': 2, 'title': 'HMAC-SHA256 完整性验证',
+            'description': '用DH协商派生的HMAC密钥重新计算HMAC，与收到的HMAC比对',
+            'data': {
+                'HMAC密钥来源': 'DH密钥协商派生',
+                'HMAC密钥': hmac_key.hex(),
+                '收到的HMAC': recv_hmac.hex(),
+                '计算的HMAC': computed_hmac.hex(),
+                '验证结果': '通过 - 数据完整' if hmac_valid else '失败 - 数据可能被篡改！',
+            },
+            'status': 'success' if hmac_valid else 'error'
+        })
 
-        if hmac_valid and sig_verified:
-            decrypted = aes_decrypt(ct, session_key, mode='cbc', iv=recv_iv)
-            decrypted_text = decrypted.decode('utf-8')
+        # 步骤3: RSA签名验证
+        sig_verified = rsa_verify(ct, signature, _connection_state.get('peer_public_key_raw', get_rsa_keys()[0]))
+        steps.append({
+            'id': 3, 'title': 'RSA 数字签名验证（不可否认性）',
+            'description': '用发送端RSA公钥验证签名，确保数据来源真实且不可否认',
+            'data': {
+                '签名算法': 'RSA-SHA256',
+                '验证流程': 'SHA-256(密文) → 用发送端公钥解密签名 → 比对',
+                '签名值(前64字节)': signature.hex()[:64] + '...',
+                '发送端公钥e': str(_connection_state.get('peer_public_key', {}).get('e', '未知')),
+                '验证结果': '通过 - 来源真实' if sig_verified else '失败 - 数据来源不可信！',
+            },
+            'status': 'success' if sig_verified else 'error'
+        })
 
-            # 每次接收覆盖写入固定文件（latest_received.json）
-            filepath = os.path.join(DATA_DIR, 'latest_received.json')
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(decrypted_text)
+        # 步骤4: AES解密
+        decrypted = aes_decrypt(ct, session_key, mode='cbc', iv=recv_iv)
+        decrypted_text = decrypted.decode('utf-8')
+        steps.append({
+            'id': 4, 'title': 'AES-128-CBC 解密',
+            'description': '用DH协商得出的会话密钥解密密文，还原原始数据',
+            'data': {
+                '会话密钥来源': 'DH密钥协商',
+                'AES密钥': session_key.hex(),
+                'IV': recv_iv.hex() if recv_iv else '',
+                '密文(前128字节)': ct.hex()[:128] + '...',
+                '解密后长度': f'{len(decrypted_text)} 字符',
+                '解密结果': '成功' if hmac_valid and sig_verified else '解密完成但验证未通过',
+            },
+            'status': 'success' if hmac_valid and sig_verified else 'error'
+        })
 
-            record = {
-                'time': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'hmac_valid': True,
-                'sig_verified': True,
-                'decrypted_data': decrypted_text,
-                'saved_to': os.path.abspath(filepath),
-                'ciphertext_hex': ct.hex()[:128] + '...',
-                'session_key_hex': session_key.hex(),
-                'hmac_key_hex': hmac_key.hex(),
-                'iv_hex': recv_iv.hex() if recv_iv else '',
-                'hmac_value': recv_hmac.hex(),
-                'signature_hex': signature.hex()[:64] + '...'
+        # 步骤5: 保存解密数据
+        filepath = os.path.join(DATA_DIR, 'latest_received.json')
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(decrypted_text)
+
+        steps.append({
+            'id': 5, 'title': '保存解密数据',
+            'description': '将解密后的原始数据保存到文件',
+            'data': {
+                '保存路径': os.path.abspath(filepath),
+                '数据长度': f'{len(decrypted_text)} 字符',
+                '数据预览': decrypted_text[:300] + ('...' if len(decrypted_text) > 300 else ''),
             }
-        else:
-            record = {
-                'time': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'hmac_valid': hmac_valid,
-                'sig_verified': sig_verified,
-                'error': ''
-            }
+        })
+
+        record = {
+            'time': time.strftime("%Y-%m-%d %H:%M:%S"),
+            'hmac_valid': hmac_valid,
+            'sig_verified': sig_verified,
+            'decrypted_data': decrypted_text,
+            'saved_to': os.path.abspath(filepath),
+            'session_key_hex': session_key.hex(),
+            'hmac_key_hex': hmac_key.hex(),
+            'iv_hex': recv_iv.hex() if recv_iv else '',
+            'hmac_value': recv_hmac.hex(),
+            'signature_hex': signature.hex()[:64] + '...',
+            'steps': steps,
+        }
+
+        if not hmac_valid or not sig_verified:
+            record['error'] = ''
             if not hmac_valid:
                 record['error'] += 'HMAC验证失败，数据可能被篡改！'
             if not sig_verified:
@@ -995,7 +1053,13 @@ def _handle_data_transfer(conn, req):
             'time': time.strftime("%Y-%m-%d %H:%M:%S"),
             'hmac_valid': False,
             'sig_verified': False,
-            'error': str(e)
+            'error': str(e),
+            'steps': [{
+                'id': 0, 'title': '接收失败',
+                'description': '处理数据传输时发生异常',
+                'data': {'错误信息': str(e)},
+                'status': 'error'
+            }]
         })
 
 
