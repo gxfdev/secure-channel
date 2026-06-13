@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.3.0'
+APP_VERSION = '2.4.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -1336,7 +1336,8 @@ def api_capture():
         packets_info, capture_log = capture_packets(count=count, timeout=timeout, filter_rule=filter_rule)
 
         json_data = packets_to_json(packets_info)
-        filepath = os.path.join(DATA_DIR, f'capture_{int(time.time()*1000)}.json')
+        # 固定文件名，每次覆盖写入
+        filepath = os.path.join(DATA_DIR, 'capture_latest.json')
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(json_data)
 
