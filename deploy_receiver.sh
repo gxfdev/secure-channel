@@ -2,17 +2,19 @@
 # 接收端一键部署脚本 (node7: 192.168.157.207)
 # 自动拉取最新镜像 + 停止旧容器 + 启动新容器
 
-IMAGE="crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest"
+VERSION="${1:-latest}"
+REGISTRY="crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs"
+IMAGE="$REGISTRY:$VERSION"
 CONTAINER="netsec-receiver"
 
-echo "===== 接收端一键部署 ====="
+echo "===== 接收端一键部署 (版本: $VERSION) ====="
 
 # 1. 停止并删除旧容器
 echo "[1] 停止旧容器..."
 docker rm -f $CONTAINER 2>/dev/null
 
-# 2. 拉取最新镜像
-echo "[2] 拉取最新镜像..."
+# 2. 拉取镜像
+echo "[2] 拉取镜像 $IMAGE ..."
 docker pull $IMAGE
 
 # 3. 启动新容器
@@ -43,5 +45,10 @@ sudo firewall-cmd --reload 2>/dev/null
 
 echo ""
 echo "===== 接收端部署完成 ====="
+echo "镜像版本: $VERSION"
 echo "Web界面: http://192.168.157.207:5001"
 echo "协商端口: 9999"
+echo ""
+echo "用法: bash deploy_receiver.sh [版本号]"
+echo "示例: bash deploy_receiver.sh 1.5.0"
+echo "      bash deploy_receiver.sh latest"

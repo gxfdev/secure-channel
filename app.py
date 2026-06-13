@@ -13,6 +13,8 @@ Flask Web 应用 - 网络安全传输演示系统
   FLASK_PORT: Flask监听端口（默认 5000）
 """
 import os
+
+APP_VERSION = '1.5.0'
 import sys
 import json
 import time
@@ -66,6 +68,23 @@ _received_data = []
 _key_files = {'pub': None, 'priv': None}
 _negotiate_server_status = {'running': False, 'port': None, 'error': None}
 _negotiate_steps = []  # 接收端协商过程可视化步骤
+
+
+def _get_local_ip():
+    """获取本机真实IP（不依赖DNS）"""
+    for target in ['8.8.8.8', '1.1.1.1', '192.168.1.1', '10.0.0.1']:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1)
+            s.connect((target, 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and ip != '127.0.0.1':
+                return ip
+        except:
+            try: s.close()
+            except: pass
+    return '127.0.0.1'
 
 
 def get_rsa_keys():
@@ -130,6 +149,7 @@ def get_info():
         }
 
     return jsonify({
+        'version': APP_VERSION,
         'mode': MODE,
         'hostname': net_info['hostname'],
         'ip': net_info.get('ip_address', '127.0.0.1'),

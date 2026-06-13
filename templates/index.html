@@ -108,6 +108,7 @@
         <!-- 本机信息 -->
         <div class="card mb4">
             <div class="flex flex-wrap gap4 text-sm">
+                <div><span class="text-slate500">版本:</span> <span id="infoVersion" style="color:#60a5fa">-</span></div>
                 <div><span class="text-slate500">主机名:</span> <span id="infoHost">-</span></div>
                 <div><span class="text-slate500">IP:</span> <span id="infoIP">-</span></div>
                 <div><span class="text-slate500">协商端口:</span> <span id="infoPort">-</span></div>
@@ -433,6 +434,7 @@ async function loadInfo() {
     try {
         var resp = await fetch('/api/info');
         sysInfo = await resp.json();
+        document.getElementById('infoVersion').textContent = sysInfo.version || '-';
         document.getElementById('infoHost').textContent = sysInfo.hostname;
         document.getElementById('infoIP').textContent = sysInfo.ip;
         document.getElementById('infoPort').textContent = sysInfo.listen_port;
