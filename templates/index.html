@@ -291,7 +291,7 @@
 
             <div class="mb4">
                 <div class="flex items-center justify-between mb2">
-                    <div class="text-sm font-bold">接收到的数据</div>
+                    <div class="text-sm font-bold">最新接收数据 <span class="text-xs text-slate500" style="font-weight:400">（仅显示最新一条）</span></div>
                     <button class="btn btn-blue btn-sm" @click="refreshRecv">刷新</button>
                 </div>
                 <div v-if="receivedData.length">
@@ -319,7 +319,7 @@
                         <div v-if="item.error" class="text-red400 text-sm">{{item.error}}</div>
                     </div>
                 </div>
-                <div v-else class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div>
+                <div v-else class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据，等待发送端发送...</div>
             </div>
         </div>
     </div>

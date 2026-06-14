@@ -73,7 +73,7 @@ _connection_state = {
     'peer_listen_port': None,
     'peer_public_key_raw': None,
 }
-_received_data = []
+_latest_received = None
 _key_files = {'pub': None, 'priv': None, 'dh_priv': None, 'dh_pub': None}
 _negotiate_server_status = {'running': False, 'port': None, 'error': None}
 _negotiate_steps = []
@@ -230,7 +230,7 @@ def get_info():
         'public_key_n_hex': hex(n),
         'key_info': key_info,
         'connection': _connection_state,
-        'received_count': len(_received_data),
+        'received_count': 1 if _latest_received else 0,
         'negotiate_server': _negotiate_server_status,
     })
 
@@ -352,7 +352,7 @@ def test_tcp():
 
 @app.route('/api/set_mode', methods=['POST'])
 def set_mode():
-    global MODE, _negotiate_server_running, _connection_state, _negotiate_server_thread, _negotiate_steps, _dh_peer, _rsa_keys, _received_data
+    global MODE, _negotiate_server_running, _connection_state, _negotiate_server_thread, _negotiate_steps, _dh_peer, _rsa_keys, _latest_received
     data = request.get_json() or {}
     new_mode = data.get('mode', '')
     if new_mode not in ('sender', 'receiver'):
@@ -363,7 +363,7 @@ def set_mode():
     # 1. 完全重置连接状态
     _reset_connection_state()
     _negotiate_steps = []
-    _received_data = []
+    _latest_received = None
 
     # 2. 重新生成所有密钥（RSA + DH），确保干净状态
     with _rsa_lock:
@@ -400,12 +400,12 @@ def set_mode():
 @app.route('/api/regenerate_keys', methods=['POST'])
 def regenerate_keys():
     """重新随机生成所有密钥（RSA + DH），并重置连接状态。"""
-    global _rsa_keys, _dh_peer, _key_files, _connection_state, _negotiate_steps, _received_data
+    global _rsa_keys, _dh_peer, _key_files, _connection_state, _negotiate_steps, _latest_received
     try:
         # 重置连接状态
         _reset_connection_state()
         _negotiate_steps = []
-        _received_data = []
+        _latest_received = None
 
         # 重新生成RSA密钥
         with _rsa_lock:
@@ -781,12 +781,12 @@ def connection_status():
 @app.route('/api/reset_connection', methods=['POST'])
 def reset_connection():
     """断开连接，通知对方，重置所有状态。"""
-    global _negotiate_steps, _received_data, _dh_peer, _rsa_keys
+    global _negotiate_steps, _latest_received, _dh_peer, _rsa_keys
     if _connection_state['status'] == 'connected':
         _notify_peer_disconnect()
     _reset_connection_state()
     _negotiate_steps = []
-    _received_data = []
+    _latest_received = None
     # 重新生成密钥，确保下次连接使用新密钥
     _dh_peer = None
     with _rsa_lock:
@@ -800,11 +800,11 @@ def reset_connection():
 
 @app.route('/api/restart_negotiate', methods=['POST'])
 def restart_negotiate():
-    global _negotiate_server_running, _negotiate_server_status, _negotiate_server_sock, _negotiate_steps, _connection_state, _dh_peer, _rsa_keys, _received_data, _negotiate_server_thread
+    global _negotiate_server_running, _negotiate_server_status, _negotiate_server_sock, _negotiate_steps, _connection_state, _dh_peer, _rsa_keys, _latest_received, _negotiate_server_thread
     # 重置连接状态和协商步骤
     _reset_connection_state()
     _negotiate_steps = []
-    _received_data = []
+    _latest_received = None
     _dh_peer = None
 
     # 重新生成RSA密钥
@@ -1117,7 +1117,7 @@ def start_negotiate_server():
 
 
 def _handle_data_transfer(conn, req):
-    global _received_data
+    global _latest_received
     try:
         session_key = _dh_peer.get_session_key()
         hmac_key = _dh_peer.get_hmac_key()
@@ -1216,10 +1216,10 @@ def _handle_data_transfer(conn, req):
             if not sig_verified:
                 record['error'] += 'RSA签名验证失败！ '
 
-        _received_data.append(record)
+        _latest_received = record
 
     except Exception as e:
-        _received_data.append({
+        _latest_received = {
             'time': time.strftime("%Y-%m-%d %H:%M:%S"),
             'hmac_valid': False,
             'sig_verified': False,
@@ -1230,7 +1230,7 @@ def _handle_data_transfer(conn, req):
                 'data': {'错误': str(e)},
                 'status': 'error'
             }]
-        })
+        }
 
 
 def _recv_exact(sock, n, timeout=30):
@@ -1320,7 +1320,7 @@ def capture_diag():
 @app.route('/api/send', methods=['POST'])
 def api_send():
     """Sender: Encrypt data with AES+HMAC+RSA signature and send to receiver."""
-    global _received_data
+    global _latest_received
     try:
         data = request.get_json() or {}
         plaintext = data.get('data', '')
@@ -1448,8 +1448,8 @@ def api_send():
 @app.route('/api/received_data')
 def received_data():
     return jsonify({
-        'count': len(_received_data),
-        'data': _received_data,
+        'count': 1 if _latest_received else 0,
+        'data': [_latest_received] if _latest_received else [],
     })
 
 
