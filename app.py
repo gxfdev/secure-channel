@@ -25,6 +25,17 @@ from dh import DHPeer
 from capture import capture_packets, packets_to_json, get_network_info, HAS_SCAPY
 
 app = Flask(__name__)
+# 修改 Jinja2 分隔符，避免与 Vue 3 的 {{ }} 冲突
+app.jinja_env.variable_start_string = '[['
+app.jinja_env.variable_end_string = ']]'
+
+# 全局异常处理，避免 Internal Server Error 无详细信息
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    tb = traceback.format_exc()
+    print(f"[ERROR] {request.path}: {e}\n{tb}")
+    return jsonify({'success': False, 'error': str(e), 'traceback': tb}), 500
 
 # 禁用API响应缓存，确保前端实时刷新
 @app.after_request
@@ -1508,8 +1519,26 @@ if __name__ == '__main__':
     print(f"  Listen Port: {LISTEN_PORT}")
     print(f"  Flask Port: {FLASK_PORT}")
 
-    get_rsa_keys()
+    # 生成 RSA 密钥（1024位可能需要几秒）
+    print("  正在生成 RSA 密钥...")
+    try:
+        get_rsa_keys()
+        print("  RSA 密钥生成完成")
+    except Exception as e:
+        print(f"  RSA 密钥生成失败: {e}")
+        import traceback
+        traceback.print_exc()
 
-    start_negotiate_server()
+    # 启动协商服务器
+    print("  正在启动协商服务器...")
+    try:
+        start_negotiate_server()
+        print("  协商服务器启动完成")
+    except Exception as e:
+        print(f"  协商服务器启动失败: {e}")
+        import traceback
+        traceback.print_exc()
 
-    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False)
+    # 启动 Flask
+    print(f"  正在启动 Flask 服务 ({FLASK_HOST}:{FLASK_PORT})...")
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, threaded=True)
