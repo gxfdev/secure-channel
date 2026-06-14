@@ -205,10 +205,12 @@
                 <div class="flex gap2 mb2 flex-wrap">
                     <input v-model="captureCount" class="input" style="width:70px" placeholder="数量">
                     <select v-model="captureFilter" class="input" style="width:220px">
+                        <option value="">所有流量(含ARP)</option>
                         <option value="ip">所有IP流量</option>
                         <option value="tcp">仅TCP流量</option>
                         <option value="udp">仅UDP流量</option>
                         <option value="icmp">仅ICMP流量</option>
+                        <option value="arp">仅ARP流量</option>
                         <option value="tcp and not port 5000">TCP(排除Web端口)</option>
                         <option value="tcp port 9999">仅协商端口(9999)</option>
                         <option value="custom">自定义BPF过滤器...</option>
