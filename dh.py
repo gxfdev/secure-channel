@@ -28,11 +28,11 @@ DH_GENERATOR = 2
 class DHPeer:
     """DH 密钥协商参与方"""
 
-    def __init__(self, bits=256, prime=None, generator=None):
+    def __init__(self, bits=512, prime=None, generator=None):
         """
         初始化DH参与方
         参数:
-            bits: 私钥位数（默认256位，足够安全）
+            bits: 私钥位数（默认512位，足够安全）
             prime: 自定义素数（None则使用RFC 3526）
             generator: 自定义生成元
         """

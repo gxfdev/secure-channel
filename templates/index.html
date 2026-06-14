@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>网络安全传输演示系统</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 16px; min-height: 100vh; }
@@ -23,6 +24,8 @@
         .btn-green:hover:not(:disabled) { background: #059669; }
         .btn-orange { background: #f59e0b; color: white; }
         .btn-orange:hover:not(:disabled) { background: #d97706; }
+        .btn-red { background: #ef4444; color: white; }
+        .btn-red:hover:not(:disabled) { background: #dc2626; }
         .btn-sm { padding: 4px 12px; font-size: 12px; }
         .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
         .st-conn { background: #10b981; box-shadow: 0 0 8px #10b981; }
@@ -38,9 +41,6 @@
         .tag-purple { background: #581c87; color: #d8b4fe; }
         .input { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 8px 12px; color: #e2e8f0; font-size: 14px; width: 100%; }
         .input:focus { outline: none; border-color: #3b82f6; }
-        .key-file { background: #0f172a; border: 1px dashed #475569; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-family: 'Consolas', monospace; color: #94a3b8; word-break: break-all; }
-        .log-area { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; max-height: 300px; overflow-y: auto; font-size: 12px; font-family: 'Consolas', monospace; }
-        .log-line { padding: 2px 0; border-bottom: 1px solid #1e293b; }
         .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
         .badge-green { background: #065f46; color: #6ee7b7; }
         .badge-blue { background: #1e40af; color: #93c5fd; }
@@ -56,12 +56,9 @@
         .items-center { align-items: center; }
         .justify-between { justify-content: space-between; }
         .flex1 { flex: 1; min-width: 0; }
-        .w24 { width: 96px; }
-        .w20 { width: 80px; }
         .mb2 { margin-bottom: 8px; }
         .mb4 { margin-bottom: 16px; }
         .mt2 { margin-top: 8px; }
-        .mt3 { margin-top: 12px; }
         .ml-auto { margin-left: auto; }
         .text-sm { font-size: 14px; }
         .text-xs { font-size: 12px; }
@@ -74,843 +71,599 @@
         .text-green400 { color: #4ade80; }
         .text-red400 { color: #f87171; }
         .text-yellow400 { color: #fbbf24; }
-        .hidden { display: none !important; }
-        .pkt-detail { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 10px; margin-top: 6px; font-size: 12px; }
-        .pkt-header { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-        .pkt-header:hover { background: #1e293b; border-radius: 4px; padding-left: 4px; }
-        .capture-log-line { padding: 3px 0; font-size: 12px; border-bottom: 1px solid #1e293b; }
-        .capture-log-line .time { color: #475569; }
-        .capture-log-line .event { color: #60a5fa; font-weight: 600; }
-        .capture-log-line .detail { color: #94a3b8; }
+        .log-area { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; max-height: 300px; overflow-y: auto; font-size: 12px; font-family: 'Consolas', monospace; }
+        .log-line { padding: 2px 0; border-bottom: 1px solid #1e293b; }
+        .key-val { font-family: 'Consolas', monospace; color: #4ade80; font-size: 11px; word-break: break-all; }
+        .section-label { color: #60a5fa; font-weight: 700; margin-bottom: 6px; font-size: 13px; }
+        .detail-block { margin: 8px 0 4px 12px; border-left: 3px solid #60a5fa; padding: 6px 10px; background: #60a5fa08; border-radius: 0 6px 6px 0; }
+        .detail-block-label { color: #60a5fa; font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+        select.input { appearance: auto; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- 标题栏 -->
-        <div class="flex items-center justify-between mb4">
-            <h1 class="font-bold text-2xl flex items-center gap2"><span>&#128274;</span> 网络安全传输演示系统</h1>
-            <div class="flex items-center gap2">
-                <span id="modeLabel" class="tag tag-blue">加载中...</span>
-            </div>
-        </div>
-
-        <!-- 本机信息 -->
-        <!-- 模式选择器 -->
-        <div class="card mb4" style="border-color:#3b82f6">
-            <div class="card-title">&#127919; 选择角色模式</div>
-            <div class="flex gap4 items-center">
-                <button id="btnModeSender" class="btn btn-blue" style="flex:1;padding:14px;font-size:16px" onclick="setMode('sender')">&#128228; 我是发送端</button>
-                <button id="btnModeReceiver" class="btn" style="flex:1;padding:14px;font-size:16px;background:#334155;color:#94a3b8" onclick="setMode('receiver')">&#128229; 我是接收端</button>
-            </div>
-            <div id="modeDesc" class="mt2 text-xs text-slate400" style="text-align:center">点击选择你的角色。发送端主动连接接收端，接收端被动等待连接。</div>
-        </div>
-
-        <!-- 本机信息 -->
-        <div class="card mb4">
-            <div class="flex flex-wrap gap4 text-sm">
-                <div><span class="text-slate500">版本:</span> <span id="infoVersion" style="color:#60a5fa">-</span></div>
-                <div><span class="text-slate500">主机名:</span> <span id="infoHost">-</span></div>
-                <div><span class="text-slate500">IP:</span> <span id="infoIP">-</span></div>
-                <div><span class="text-slate500">协商端口:</span> <span id="infoPort">-</span></div>
-                <div><span class="text-slate500">RSA:</span> <span id="infoRSA">-</span></div>
-                <div><span class="text-slate500">抓包:</span> <span id="infoScapy">-</span></div>
-            </div>
-        </div>
-
-        <!-- 密钥数据 -->
-        <div class="card mb4" style="border-color:#7c3aed">
-            <div class="card-title" style="color:#a78bfa">&#128273; 密钥数据</div>
-            <div id="keyDataPanel" class="text-xs">
-                <div class="text-slate500" style="text-align:center;padding:8px 0">加载中...</div>
-            </div>
-        </div>
-
-        <!-- 密钥管理 -->
-        <div class="card mb4" style="border-color:#f59e0b">
-            <div class="card-title" style="color:#fbbf24">&#128274; 密钥管理</div>
-            <div class="text-xs text-slate400 mb2">RSA 密钥为随机自动生成（1024位），DH 密钥在连接时自动生成。点击下方按钮可重新生成所有密钥。</div>
-            <div class="flex gap2 items-center">
-                <button class="btn btn-sm" style="background:#7c3aed;color:white" onclick="regenerateKeys()">随机重新生成所有密钥</button>
-                <span id="customKeyResult" class="text-xs"></span>
-            </div>
-        </div>
-
-        <!-- ====== 发送端面板 ====== -->
-        <div id="senderPanel" class="hidden">
-            <div class="card">
-                <div class="card-title text-blue400">&#128228; 发送端 — 主动发起连接 <span class="badge badge-purple">机密性</span> <span class="badge badge-orange">不可否认</span></div>
-
-                <!-- 1. 连接 -->
-                <div class="mb4">
-                    <div class="text-sm font-bold mb2">1. 建立连接 &amp; 密钥协商</div>
-                    <div class="step-card mb2" style="border-color:#1e40af;background:#0c1529">
-                        <div class="text-xs" style="color:#60a5fa;line-height:1.8">
-                            <b>连接说明：</b>输入<b>接收端的 IP 地址</b>和<b>接收端的协商端口(默认9999)</b>，然后点击「连接」。<br>
-                            发送端将主动与接收端建立 TCP 连接，然后进行 5 步密钥交换：<br>
-                            &nbsp;&nbsp;① TCP 三次握手 → ② 交换 RSA 公钥 → ③ 交换 DH 公钥(带RSA签名) → ④ 验证签名 → ⑤ 生成会话密钥<br>
-                            <b>接收端只需启动并等待即可，不需要做任何操作。</b>
-                        </div>
-                    </div>
-                    <div class="flex gap2 mb2">
-                        <input id="targetHost" class="input flex1" placeholder="接收端 IP 地址（如 192.168.1.100）" value="">
-                        <input id="targetPort" class="input" style="width:100px" placeholder="端口" value="9999">
-                        <button id="btnConnect" class="btn btn-blue" onclick="doConnect()">连接</button>
-                        <button class="btn btn-sm" style="background:#ef4444;color:white" onclick="resetConnection()">断开连接</button>
-                    </div>
-                    <div class="flex gap2 mb2">
-                        <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" onclick="testTcp()">测试连通性</button>
-                        <button class="btn btn-sm" style="background:#7c3aed;color:white" onclick="debugConnect()">调试连接</button>
-                        <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" onclick="checkHealth()">检查本机服务</button>
-                        <span id="testResult" class="text-xs text-slate400"></span>
-                    </div>
-                    <div id="senderConnStatus" class="mb2 text-sm"></div>
-                    <div id="connectResult" class="hidden"></div>
-                </div>
-
-                <!-- 2. 抓包 -->
-                <div class="mb4">
-                    <div class="text-sm font-bold mb2">2. 抓取网络数据包</div>
-                    <div class="text-xs text-slate400 mb2" style="line-height:1.6">
-                        抓包原理：使用 <b>scapy</b> 库将网卡设为<b>混杂模式</b>，直接从网卡读取原始数据帧，解析以太网头、IP头、TCP/UDP头和载荷。<br>
-                        BPF过滤器：内核级过滤，只捕获符合规则的数据包，减少无关流量。<br>
-                        常用规则：<code>ip</code>(所有IP包)、<code>tcp</code>(仅TCP)、<code>host 192.168.1.1</code>(指定IP)、<code>tcp and host 10.0.0.1</code>(组合)
-                    </div>
-                    <div class="flex gap2 mb2 flex-wrap">
-                        <input id="captureCount" class="input" style="width:70px" placeholder="数量" value="5">
-                        <select id="captureFilter" class="input" style="width:220px">
-                            <option value="ip">所有IP流量</option>
-                            <option value="tcp">仅TCP流量</option>
-                            <option value="udp">仅UDP流量</option>
-                            <option value="icmp">仅ICMP流量</option>
-                            <option value="tcp and not port 5000">TCP(排除Web端口)</option>
-                            <option value="tcp port 9999">仅协商端口(9999)</option>
-                            <option value="tcp port 5000">仅Web端口(5000)</option>
-                            <option value="tcp port 9999 or tcp port 5000">协商+Web端口</option>
-                            <option value="custom">自定义BPF过滤器...</option>
-                        </select>
-                        <input id="captureCustomFilter" class="input hidden" style="width:260px" placeholder="如: host 192.168.1.1 and tcp">
-                        <button id="btnCapturePeer" class="btn btn-sm" style="background:#7c3aed;color:#fff" onclick="capturePeer()">抓取对方IP</button>
-                        <button id="btnCapture" class="btn btn-orange" onclick="doCapture()">抓取数据包</button>
-                    </div>
-                    <div id="captureResult" class="hidden"></div>
-                </div>
-
-                <!-- 3. 发送 -->
-                <div>
-                    <div class="text-sm font-bold mb2">3. 加密并发送</div>
-                    <textarea id="sendData" class="input mb2" placeholder="抓取数据后自动填入，或手动输入要发送的明文..."></textarea>
-                    <button id="btnSend" class="btn btn-green" onclick="doSend()" disabled>加密并发送</button>
-                    <div id="sendResult" class="mt3 hidden"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ====== 接收端面板 ====== -->
-        <div id="receiverPanel" class="hidden">
-            <div class="card">
-                <div class="card-title text-green400">&#128229; 接收端 — 被动等待连接 <span class="badge badge-green">完整性</span> <span class="badge badge-blue">真实性</span></div>
-
-                <div class="step-card mb4" style="border-color:#065f46;background:#051a0f">
-                    <div class="text-xs" style="color:#4ade80;line-height:1.8">
-                        <b>接收端说明：</b>接收端被动等待发送端的连接请求，不需要主动操作。<br>
-                        &bull; 协商服务器已在本机 <b id="recvListenPortHint">9999</b> 端口监听<br>
-                        &bull; 发送端需要连接到 <b>本机IP:本机协商端口</b> 才能建立连接<br>
-                        &bull; 连接建立后，接收端会自动完成密钥协商和数据解密
-                    </div>
-                </div>
-
-                <div class="mb4">
-                    <div class="text-sm font-bold mb2">连接状态</div>
-                    <div class="step-card">
-                        <div class="flex items-center gap2">
-                            <span id="recvDot" class="status-dot st-disconn"></span>
-                            <span id="recvText" class="text-sm">等待发送端连接...</span>
-                        </div>
-                        <div id="recvInfo" class="mt2 text-xs text-slate500 hidden"></div>
-                    </div>
-                    <button class="btn btn-blue btn-sm mt2" onclick="refreshConn()">刷新状态</button>
-                    <button class="btn btn-orange btn-sm mt2" onclick="restartNegotiate()">重启协商服务器</button>
-                    <button class="btn btn-red btn-sm mt2" onclick="resetConnection()">断开连接</button>
-                </div>
-
-                <div class="mb4">
-                    <div class="text-sm font-bold mb2">密钥协商过程</div>
-                    <div id="recvNegotiateSteps"><div class="text-sm text-slate500" style="text-align:center;padding:16px 0">等待发送端连接后显示协商过程...</div></div>
-                </div>
-
-                <div class="mb4">
-                    <div class="flex items-center justify-between mb2">
-                        <div class="text-sm font-bold">接收到的数据</div>
-                        <button class="btn btn-blue btn-sm" onclick="refreshRecv()">刷新</button>
-                    </div>
-                    <div id="recvList"><div class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 通用：算法测试 -->
-        <div class="card">
-            <div class="flex items-center gap2">
-                <button class="btn btn-blue btn-sm" onclick="testAlgo()">测试所有算法</button>
-                <div id="algoResult" class="text-xs"></div>
-            </div>
-        </div>
-
-        <!-- 日志 -->
-        <div class="card">
-            <div class="card-title text-slate400">&#128203; 操作日志 <button class="btn btn-sm ml-auto" style="background:#334155;color:#94a3b8" onclick="clearLog()">清空</button></div>
-            <div id="logArea" class="log-area"><div class="text-slate500" style="text-align:center;padding:8px 0">等待操作...</div></div>
+<div id="app" class="container">
+    <!-- 标题栏 -->
+    <div class="flex items-center justify-between mb4">
+        <h1 class="font-bold text-2xl flex items-center gap2"><span>&#128274;</span> 网络安全传输演示系统</h1>
+        <div class="flex items-center gap2">
+            <span class="tag" :class="mode==='sender'?'tag-blue':'tag-green'">{{mode==='sender'?'发送端':'接收端'}}</span>
+            <span class="text-xs text-slate500">v{{version}}</span>
         </div>
     </div>
 
+    <!-- 本机信息 -->
+    <div class="card mb4" style="border-color:#334155">
+        <div class="card-title text-slate400">&#128187; 本机信息</div>
+        <div class="grid2">
+            <div>
+                <div class="data-row"><span class="data-key">主机名</span><span class="data-val">{{info.hostname||'-'}}</span></div>
+                <div class="data-row"><span class="data-key">IP 地址</span><span class="data-val">{{info.ip||'-'}}</span></div>
+                <div class="data-row"><span class="data-key">协商端口</span><span class="data-val">{{info.listen_port||'-'}}</span></div>
+            </div>
+            <div>
+                <div class="data-row"><span class="data-key">RSA 位数</span><span class="data-val">{{info.rsa_bits||'-'}} 位</span></div>
+                <div class="data-row"><span class="data-key">Scapy</span><span class="data-val">{{info.scapy_available?'可用':'不可用'}}</span></div>
+                <div class="data-row"><span class="data-key">版本</span><span class="data-val">{{version}}</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 密钥数据 -->
+    <div class="card mb4" style="border-color:#3b82f6">
+        <div class="card-title text-blue400">&#128273; 密钥数据 <span class="text-xs text-slate400 ml-auto">每2秒自动刷新</span></div>
+        <div v-if="keyInfo.rsa" class="mb4">
+            <div class="section-label">RSA 密钥对 ({{info.rsa_bits}}位)</div>
+            <div class="data-row"><span class="data-key">公钥 e (指数)</span><span class="data-val key-val">{{keyInfo.rsa.public_key.e}}</span></div>
+            <div class="data-row"><span class="data-key">公钥 n (模数)</span><span class="data-val key-val">{{truncate(keyInfo.rsa.public_key.n, 60)}}... ({{keyInfo.rsa.public_key.n_bits}}位)</span></div>
+            <div class="data-row"><span class="data-key">私钥 d</span><span class="data-val key-val" style="color:#fbbf24">{{truncate(keyInfo.rsa.private_key.d, 60)}}... ({{keyInfo.rsa.private_key.d_bits}}位)</span></div>
+        </div>
+        <div v-if="keyInfo.dh" class="mb4">
+            <div class="section-label" style="color:#f59e0b">DH 密钥协商</div>
+            <div class="data-row"><span class="data-key">DH 私钥</span><span class="data-val key-val" style="color:#fbbf24">{{truncate(keyInfo.dh.private_key, 50)}}...</span></div>
+            <div class="data-row"><span class="data-key">DH 公钥</span><span class="data-val key-val">{{truncate(keyInfo.dh.public_key, 50)}}...</span></div>
+            <div class="data-row" v-if="keyInfo.dh.shared_secret"><span class="data-key">共享秘密</span><span class="data-val key-val" style="color:#a78bfa">{{truncate(keyInfo.dh.shared_secret, 50)}}...</span></div>
+        </div>
+        <div v-if="keyInfo.session" class="mb4">
+            <div class="section-label" style="color:#10b981">会话密钥 (已协商)</div>
+            <div class="data-row"><span class="data-key">AES-128 密钥</span><span class="data-val key-val">{{keyInfo.session.aes_key}}</span></div>
+            <div class="data-row"><span class="data-key">HMAC-SHA256 密钥</span><span class="data-val key-val">{{keyInfo.session.hmac_key}}</span></div>
+        </div>
+        <div v-if="!keyInfo.rsa && !keyInfo.dh && !keyInfo.session" class="text-slate500 text-sm" style="text-align:center;padding:8px 0">密钥生成中...</div>
+    </div>
+
+    <!-- 密钥管理 -->
+    <div class="card mb4" style="border-color:#f59e0b">
+        <div class="card-title" style="color:#fbbf24">&#128274; 密钥管理</div>
+        <div class="text-xs text-slate400 mb2">RSA 密钥随机自动生成（1024位，e 随机选取），DH 密钥在连接时自动生成（512位私钥）。</div>
+        <div class="flex gap2 items-center">
+            <button class="btn btn-sm" style="background:#7c3aed;color:white" @click="regenerateKeys" :disabled="loading.regenerate">随机重新生成所有密钥</button>
+            <span class="text-xs" :style="{color: regenResult.color}">{{regenResult.text}}</span>
+        </div>
+    </div>
+
+    <!-- 模式选择 -->
+    <div class="card mb4" style="border-color:#3b82f6">
+        <div class="card-title">&#127919; 选择角色模式</div>
+        <div class="flex gap2 mb2">
+            <button class="btn" :class="mode==='sender'?'btn-blue':''" :style="mode!=='sender'?'flex:1;padding:14px;font-size:16px;background:#334155;color:#94a3b8':'flex:1;padding:14px;font-size:16px'" @click="setMode('sender')">发送端</button>
+            <button class="btn" :class="mode==='receiver'?'btn-green':''" :style="mode!=='receiver'?'flex:1;padding:14px;font-size:16px;background:#334155;color:#94a3b8':'flex:1;padding:14px;font-size:16px'" @click="setMode('receiver')">接收端</button>
+        </div>
+        <div class="text-sm" v-if="mode==='sender'" style="color:#60a5fa">发送端模式 — 主动连接接收端，输入接收端的 IP 和协商端口后点击「连接」</div>
+        <div class="text-sm" v-else style="color:#4ade80">接收端模式 — 被动等待发送端连接，请将本机 IP 和协商端口告知发送端</div>
+    </div>
+
+    <!-- 发送端面板 -->
+    <div v-if="mode==='sender'">
+        <div class="card">
+            <div class="card-title text-blue400">&#128228; 发送端 — 主动发起连接 <span class="badge badge-purple">机密性</span> <span class="badge badge-orange">不可否认</span></div>
+
+            <!-- 1. 连接 -->
+            <div class="mb4">
+                <div class="text-sm font-bold mb2">1. 建立连接 &amp; 密钥协商</div>
+                <div class="step-card mb2" style="border-color:#1e40af;background:#0c1529">
+                    <div class="text-xs" style="color:#60a5fa;line-height:1.8">
+                        <b>连接说明：</b>输入<b>接收端的 IP 地址</b>和<b>接收端的协商端口(默认9999)</b>，然后点击「连接」。<br>
+                        发送端将主动与接收端建立 TCP 连接，然后进行 5 步密钥交换：<br>
+                        &nbsp;&nbsp;① TCP 三次握手 → ② 交换 RSA 公钥 → ③ 交换 DH 公钥(带RSA签名) → ④ 验证签名 → ⑤ 生成会话密钥<br>
+                        <b>接收端只需启动并等待即可，不需要做任何操作。</b>
+                    </div>
+                </div>
+                <div class="flex gap2 mb2">
+                    <input v-model="targetHost" class="input flex1" placeholder="接收端 IP 地址（如 192.168.1.100）">
+                    <input v-model="targetPort" class="input" style="width:100px" placeholder="端口">
+                    <button class="btn btn-blue" @click="doConnect" :disabled="loading.connect">{{loading.connect?'连接中...':'连接'}}</button>
+                    <button class="btn btn-sm btn-red" @click="resetConnection">断开连接</button>
+                </div>
+                <div class="flex gap2 mb2">
+                    <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" @click="testTcp">测试连通性</button>
+                    <button class="btn btn-sm" style="background:#7c3aed;color:white" @click="debugConnect">调试连接</button>
+                    <button class="btn btn-sm" style="background:#475569;color:#e2e8f0" @click="checkHealth">检查本机服务</button>
+                    <span class="text-xs text-slate400">{{testResult}}</span>
+                </div>
+                <div class="mb2 text-sm">
+                    <span class="status-dot" :class="connStatusClass"></span>
+                    <span :style="{color: conn.status==='connected'?'#4ade80':'#94a3b8', marginLeft:'8px'}">{{connStatusLabel}}</span>
+                </div>
+            </div>
+
+            <!-- 连接步骤 -->
+            <div v-if="connectSteps.length" class="mb4">
+                <div v-for="step in connectSteps" :key="step.id" class="step-card" :style="{borderColor: step.status==='success'?'#065f46':step.status==='error'?'#7f1d1d':'#1e40af'}">
+                    <div class="flex items-center gap2 mb2">
+                        <span class="step-num" :style="{background: step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6'}">{{step.id}}</span>
+                        <span class="font-bold text-sm">{{step.title}}</span>
+                        <span :style="{color: step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6', fontWeight:700, fontSize:'13px', marginLeft:'auto'}">{{step.status==='success'?'✔ 通过':step.status==='error'?'✘ 失败':'⏳ 进行中'}}</span>
+                    </div>
+                    <div class="text-xs text-slate400 mb2">{{step.description||''}}</div>
+                    <div v-if="step.detail" v-html="renderDetail(step.detail)"></div>
+                </div>
+            </div>
+
+            <!-- 2. 抓包 -->
+            <div class="mb4">
+                <div class="text-sm font-bold mb2">2. 抓取网络数据包</div>
+                <div class="flex gap2 mb2 flex-wrap">
+                    <input v-model="captureCount" class="input" style="width:70px" placeholder="数量">
+                    <select v-model="captureFilter" class="input" style="width:220px">
+                        <option value="ip">所有IP流量</option>
+                        <option value="tcp">仅TCP流量</option>
+                        <option value="udp">仅UDP流量</option>
+                        <option value="icmp">仅ICMP流量</option>
+                        <option value="tcp and not port 5000">TCP(排除Web端口)</option>
+                        <option value="tcp port 9999">仅协商端口(9999)</option>
+                        <option value="custom">自定义BPF过滤器...</option>
+                    </select>
+                    <input v-if="captureFilter==='custom'" v-model="captureCustomFilter" class="input" style="width:260px" placeholder="如: host 192.168.1.1 and tcp">
+                    <button class="btn btn-sm" style="background:#7c3aed;color:#fff" @click="capturePeer">抓取对方IP</button>
+                    <button class="btn btn-orange btn-sm" @click="doCapture" :disabled="loading.capture">{{loading.capture?'抓取中...':'抓取数据包'}}</button>
+                </div>
+            </div>
+
+            <!-- 3. 发送 -->
+            <div>
+                <div class="text-sm font-bold mb2">3. 加密并发送</div>
+                <textarea v-model="sendData" class="input mb2" placeholder="抓取数据后自动填入，或手动输入要发送的明文..."></textarea>
+                <button class="btn btn-green" @click="doSend" :disabled="conn.status!=='connected'||loading.send">{{loading.send?'加密发送中...':'加密并发送'}}</button>
+            </div>
+
+            <!-- 发送步骤 -->
+            <div v-if="sendSteps.length" class="mt3">
+                <div v-for="step in sendSteps" :key="step.id" class="step-card">
+                    <div class="flex items-center gap2 mb2">
+                        <span class="step-num" :style="{background: step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6'}">{{step.id}}</span>
+                        <span class="font-bold text-sm">{{step.title}}</span>
+                    </div>
+                    <div class="text-xs text-slate400 mb2">{{step.description||''}}</div>
+                    <div v-if="step.detail" v-html="renderDetail(step.detail)"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 接收端面板 -->
+    <div v-if="mode==='receiver'">
+        <div class="card">
+            <div class="card-title text-green400">&#128229; 接收端 — 被动等待连接 <span class="badge badge-green">完整性</span> <span class="badge badge-blue">真实性</span></div>
+
+            <div class="step-card mb4" style="border-color:#065f46;background:#051a0f">
+                <div class="text-xs" style="color:#4ade80;line-height:1.8">
+                    <b>接收端说明：</b>接收端被动等待发送端的连接请求，不需要主动操作。<br>
+                    &bull; 协商服务器已在本机 <b>{{info.listen_port||9999}}</b> 端口监听<br>
+                    &bull; 发送端需要连接到 <b>本机IP:本机协商端口</b> 才能建立连接<br>
+                    &bull; 连接建立后，接收端会自动完成密钥协商和数据解密
+                </div>
+            </div>
+
+            <div class="mb4">
+                <div class="text-sm font-bold mb2">连接状态</div>
+                <div class="step-card">
+                    <div class="flex items-center gap2">
+                        <span class="status-dot" :class="connStatusClass"></span>
+                        <span class="text-sm">{{connStatusLabel}}</span>
+                    </div>
+                    <div v-if="conn.peer_ip" class="mt2 text-xs text-slate500">
+                        对方: {{conn.peer_ip}}:{{conn.peer_listen_port||conn.peer_port||''}}<br>
+                        <span v-if="conn.session_key">会话密钥: {{conn.session_key.substring(0,16)}}...</span>
+                    </div>
+                </div>
+                <div class="flex gap2 mt2">
+                    <button class="btn btn-blue btn-sm" @click="refreshConn">刷新状态</button>
+                    <button class="btn btn-orange btn-sm" @click="restartNegotiate">重启协商服务器</button>
+                    <button class="btn btn-red btn-sm" @click="resetConnection">断开连接</button>
+                </div>
+            </div>
+
+            <div class="mb4">
+                <div class="text-sm font-bold mb2">密钥协商过程</div>
+                <div v-if="negotiateSteps.length">
+                    <div v-for="step in negotiateSteps" :key="step.id" class="step-card" :style="{borderColor: step.status==='success'?'#065f46':step.status==='error'?'#7f1d1d':'#1e40af'}">
+                        <div class="flex items-center gap2 mb2">
+                            <span class="step-num" :style="{background: step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6'}">{{step.id}}</span>
+                            <span class="font-bold text-sm">{{step.title}}</span>
+                            <span :style="{color: step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6', fontWeight:700, fontSize:'13px', marginLeft:'auto'}">{{step.status==='success'?'✔ 通过':step.status==='error'?'✘ 失败':'⏳ 进行中'}}</span>
+                        </div>
+                        <div class="text-xs text-slate400 mb2">{{step.description||''}}</div>
+                        <div v-if="step.detail" v-html="renderDetail(step.detail)"></div>
+                    </div>
+                </div>
+                <div v-else class="text-sm text-slate500" style="text-align:center;padding:16px 0">等待发送端连接后显示协商过程...</div>
+            </div>
+
+            <div class="mb4">
+                <div class="flex items-center justify-between mb2">
+                    <div class="text-sm font-bold">接收到的数据</div>
+                    <button class="btn btn-blue btn-sm" @click="refreshRecv">刷新</button>
+                </div>
+                <div v-if="receivedData.length">
+                    <div v-for="(item, i) in receivedData" :key="i" class="step-card" :style="{borderColor: (item.hmac_valid && item.sig_verified)?'#10b981':'#ef4444'}">
+                        <div class="flex items-center gap2 mb2">
+                            <span class="step-num" :style="{background: (item.hmac_valid && item.sig_verified)?'#10b981':'#ef4444'}">{{i+1}}</span>
+                            <span class="font-bold text-sm" :style="{color: (item.hmac_valid && item.sig_verified)?'#4ade80':'#f87171'}">{{(item.hmac_valid && item.sig_verified)?'解密成功':'解密失败'}}</span>
+                            <span class="text-xs text-slate500">{{item.time}}</span>
+                        </div>
+                        <div v-if="item.steps && item.steps.length">
+                            <div v-for="s in item.steps" :key="s.id" style="margin:8px 0;padding:8px 12px;border-left:3px solid" :style="{borderLeftColor: s.status==='success'?'#10b981':s.status==='error'?'#ef4444':'#3b82f6', background: (s.status==='success'?'#10b981':s.status==='error'?'#ef4444':'#3b82f6')+'11', borderRadius:'0 6px 6px 0'}">
+                                <div class="flex items-center gap2 mb1">
+                                    <span class="step-num" :style="{background: s.status==='success'?'#10b981':s.status==='error'?'#ef4444':'#3b82f6', width:'20px', height:'20px', fontSize:'10px'}">{{s.id}}</span>
+                                    <span class="font-bold text-sm">{{s.title}}</span>
+                                </div>
+                                <div class="text-xs text-slate400 mb1">{{s.description||''}}</div>
+                                <div v-if="s.data">
+                                    <div v-for="(val, key) in s.data" :key="key" class="data-row">
+                                        <span class="data-key">{{key}}</span>
+                                        <span class="data-val font-mono" :style="{color: String(val).indexOf('通过')>=0?'#4ade80':String(val).indexOf('失败')>=0?'#f87171':'#e2e8f0', fontSize: String(val).length>80?'10px':'12px'}">{{val}}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-if="item.error" class="text-red400 text-sm">{{item.error}}</div>
+                    </div>
+                </div>
+                <div v-else class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 算法测试 -->
+    <div class="card">
+        <div class="flex items-center gap2">
+            <button class="btn btn-blue btn-sm" @click="testAlgo">测试所有算法</button>
+            <div v-if="algoResults" class="flex gap2 flex-wrap">
+                <div v-for="(pass, name) in algoResults" :key="name" class="step-card" style="text-align:center;padding:6px 12px">
+                    <div class="font-bold" :style="{color: pass==='通过'?'#4ade80':'#f87171'}">{{name}}</div>
+                    <div :style="{color: pass==='通过'?'#4ade80':'#f87171'}">{{pass}}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 日志 -->
+    <div class="card">
+        <div class="card-title text-slate400">&#128203; 操作日志 <button class="btn btn-sm ml-auto" style="background:#334155;color:#94a3b8" @click="logs=[]">清空</button></div>
+        <div class="log-area" ref="logArea">
+            <div v-if="!logs.length" class="text-slate500" style="text-align:center;padding:8px 0">等待操作...</div>
+            <div v-for="(l, i) in logs" :key="i" class="log-line">
+                <span style="color:#475569">[{{l.time}}]</span> <span :style="{color: l.color}">{{l.msg}}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
-let sysInfo = {};
-let capturedData = '';
-let currentMode = '';
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } = Vue;
 
-function log(msg, type) {
-    type = type || 'info';
-    var area = document.getElementById('logArea');
-    var t = new Date().toLocaleTimeString();
-    var c = {info:'#94a3b8',success:'#10b981',error:'#ef4444',warn:'#f59e0b'}[type]||'#94a3b8';
-    area.innerHTML += '<div class="log-line"><span style="color:#475569">['+t+']</span> <span style="color:'+c+'">'+msg+'</span></div>';
-    area.scrollTop = area.scrollHeight;
-}
-function clearLog() { document.getElementById('logArea').innerHTML = ''; }
-function show(id) { document.getElementById(id).classList.remove('hidden'); }
-function hide(id) { document.getElementById(id).classList.add('hidden'); }
+createApp({
+    setup() {
+        // === 基础数据 ===
+        const info = reactive({ hostname:'', ip:'', listen_port:9999, rsa_bits:1024, scapy_available:false, version:'' });
+        const version = ref('');
+        const mode = ref('sender');
+        const keyInfo = reactive({ rsa:null, dh:null, session:null });
+        const conn = reactive({ status:'disconnected', peer_ip:null, peer_port:null, peer_listen_port:null, session_key:null, hmac_key:null, peer_verified:false });
 
-function esc(s) { var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+        // === 输入 ===
+        const targetHost = ref('');
+        const targetPort = ref('9999');
+        const sendData = ref('');
+        const captureCount = ref('5');
+        const captureFilter = ref('ip');
+        const captureCustomFilter = ref('');
 
-// 渲染步骤卡片（通用，发送端+接收端共用）
-function renderStepCard(step) {
-    var statusIcon = step.status==='success'?'&#10004;':step.status==='error'?'&#10008;':'&#8987;';
-    var statusColor = step.status==='success'?'#10b981':step.status==='error'?'#ef4444':'#3b82f6';
-    var statusText = step.status==='success'?'通过':step.status==='error'?'失败':'进行中';
-    var borderClr = step.status==='success'?'#065f46':step.status==='error'?'#7f1d1d':'#1e40af';
-    var html = '<div class="step-card" style="border-color:'+borderClr+'">';
-    html += '<div class="flex items-center gap2 mb2">';
-    html += '<span class="step-num" style="background:'+statusColor+'">'+step.id+'</span>';
-    html += '<span class="font-bold text-sm">'+esc(step.title)+'</span>';
-    html += '<span style="color:'+statusColor+';font-weight:700;font-size:13px;margin-left:auto">'+statusIcon+' '+statusText+'</span>';
-    html += '</div>';
-    html += '<div class="text-xs text-slate400 mb2">'+esc(step.description||'')+'</div>';
-    if (step.detail) {
-        html += renderDetail(step.detail, 0);
-    }
-    html += '</div>';
-    return html;
-}
+        // === 状态 ===
+        const loading = reactive({ connect:false, send:false, capture:false, regenerate:false });
+        const testResult = ref('');
+        const regenResult = reactive({ text:'', color:'#94a3b8' });
+        const connectSteps = ref([]);
+        const sendSteps = ref([]);
+        const negotiateSteps = ref([]);
+        const receivedData = ref([]);
+        const logs = ref([]);
+        const algoResults = ref(null);
 
-// 渲染嵌套详情（支持对象、数组、元组）
-function renderDetail(detail, depth) {
-    if (!detail) return '';
-    depth = depth || 0;
-    var html = '';
-    for (var k in detail) {
-        var v = detail[k];
-        if (typeof v === 'object' && !Array.isArray(v) && v !== null) {
-            var sectionColor = ['#60a5fa','#f59e0b','#4ade80','#c084fc','#f87171'][depth % 5];
-            html += '<div style="margin:8px 0 4px 12px;border-left:3px solid '+sectionColor+';padding:6px 10px;background:'+sectionColor+'08;border-radius:0 6px 6px 0">';
-            html += '<div style="color:'+sectionColor+';font-weight:700;font-size:12px;margin-bottom:4px">'+esc(k)+'</div>';
-            html += renderDetail(v, depth+1);
-            html += '</div>';
-        } else if (Array.isArray(v)) {
-            html += '<div class="data-row"><span class="data-key" style="color:#f59e0b">'+esc(k)+'</span><span class="data-val">';
-            for (var i=0; i<v.length; i++) {
-                if (typeof v[i] === 'object' && Array.isArray(v[i]) && v[i].length >= 2) {
-                    html += '<div style="padding:3px 0;border-bottom:1px solid #1e293b">';
-                    html += '<span style="color:#4ade80;font-weight:600">'+esc(String(v[i][0]))+'</span>';
-                    if (v[i][1]) html += ' <span style="color:#94a3b8">'+esc(String(v[i][1]))+'</span>';
-                    if (v[i][2]) html += ' <span style="color:#64748b;font-size:11px">('+esc(String(v[i][2]))+')</span>';
+        // === 计算属性 ===
+        const connStatusMap = {
+            disconnected:{cls:'st-disconn',lbl:'未连接'},
+            connecting:{cls:'st-connecting',lbl:'连接中...'},
+            exchanging_rsa_keys:{cls:'st-negot',lbl:'交换RSA公钥中...'},
+            exchanging_dh_keys:{cls:'st-negot',lbl:'交换DH公钥中...'},
+            verifying_signatures:{cls:'st-negot',lbl:'验证签名中...'},
+            negotiating:{cls:'st-negot',lbl:'密钥协商中...'},
+            connected:{cls:'st-conn',lbl:'已连接'}
+        };
+        const connStatusClass = computed(() => (connStatusMap[conn.status]||connStatusMap.disconnected).cls);
+        const connStatusLabel = computed(() => (connStatusMap[conn.status]||connStatusMap.disconnected).lbl);
+
+        // === 日志 ===
+        function log(msg, type) {
+            type = type || 'info';
+            const colors = {info:'#94a3b8',success:'#10b981',error:'#ef4444',warn:'#f59e0b'};
+            logs.value.push({ time: new Date().toLocaleTimeString(), msg, color: colors[type]||'#94a3b8' });
+            if (logs.value.length > 200) logs.value.splice(0, logs.value.length - 200);
+            nextTick(() => {
+                const el = document.querySelector('.log-area');
+                if (el) el.scrollTop = el.scrollHeight;
+            });
+        }
+
+        // === 工具 ===
+        function truncate(s, n) { s = String(s||''); return s.length > n ? s.substring(0, n) + '...' : s; }
+        function esc(s) { const d = document.createElement('div'); d.textContent = String(s||''); return d.innerHTML; }
+
+        function renderDetail(detail, depth) {
+            depth = depth || 0;
+            let html = '';
+            for (const k in detail) {
+                const v = detail[k];
+                if (v && typeof v === 'object' && !Array.isArray(v)) {
+                    const sc = ['#60a5fa','#f59e0b','#4ade80','#c084fc','#f87171'][depth % 5];
+                    html += `<div style="margin:8px 0 4px 12px;border-left:3px solid ${sc};padding:6px 10px;background:${sc}08;border-radius:0 6px 6px 0">`;
+                    html += `<div style="color:${sc};font-weight:700;font-size:12px;margin-bottom:4px">${esc(k)}</div>`;
+                    html += renderDetail(v, depth+1);
                     html += '</div>';
-                } else if (typeof v[i] === 'string') {
-                    html += '<div style="padding:2px 0;color:#e2e8f0">'+esc(v[i])+'</div>';
+                } else if (Array.isArray(v)) {
+                    html += `<div class="data-row"><span class="data-key" style="color:#f59e0b">${esc(k)}</span><span class="data-val">`;
+                    v.forEach(item => { html += `<div style="padding:2px 0;color:#e2e8f0">${esc(String(item))}</div>`; });
+                    html += '</span></div>';
                 } else {
-                    html += '<div>'+esc(String(v[i]))+'</div>';
+                    const val = String(v);
+                    const isKey = k.indexOf('密钥')>=0 || k.indexOf('key')>=0;
+                    const isHash = k.indexOf('哈希')>=0 || k.indexOf('HMAC')>=0 || k.indexOf('签名')>=0;
+                    const isResult = k.indexOf('结果')>=0 || k.indexOf('验证')>=0;
+                    let vs = 'font-family:monospace;';
+                    if (isKey) vs += 'color:#4ade80;font-size:11px;word-break:break-all;';
+                    else if (isHash) vs += 'color:#fbbf24;font-size:11px;word-break:break-all;';
+                    else if (isResult && val.indexOf('通过')>=0) vs += 'color:#4ade80;font-weight:700;';
+                    else if (isResult && val.indexOf('失败')>=0) vs += 'color:#f87171;font-weight:700;';
+                    else vs += 'color:#e2e8f0;';
+                    html += `<div class="data-row"><span class="data-key">${esc(k)}</span><span class="data-val" style="${vs}">${esc(val)}</span></div>`;
                 }
             }
-            html += '</span></div>';
-        } else {
-            var val = String(v);
-            // 检测hex值/密钥/哈希，用等宽字体+颜色
-            var isHex = /^[0-9a-f]{16,}$/i.test(val);
-            var isKey = k.indexOf('密钥')>=0 || k.indexOf('key')>=0 || k.indexOf('Key')>=0;
-            var isHash = k.indexOf('哈希')>=0 || k.indexOf('hash')>=0 || k.indexOf('Hash')>=0 || k.indexOf('HMAC')>=0 || k.indexOf('签名')>=0;
-            var isResult = k.indexOf('结果')>=0 || k.indexOf('验证')>=0;
-            var valStyle = 'font-family:monospace;';
-            if (isKey || isHex) valStyle += 'color:#4ade80;font-size:11px;word-break:break-all;';
-            else if (isHash) valStyle += 'color:#fbbf24;font-size:11px;word-break:break-all;';
-            else if (isResult && val.indexOf('通过')>=0) valStyle += 'color:#4ade80;font-weight:700;';
-            else if (isResult && val.indexOf('失败')>=0) valStyle += 'color:#f87171;font-weight:700;';
-            else valStyle += 'color:#e2e8f0;';
-            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val" style="'+valStyle+'">'+esc(val)+'</span></div>';
-        }
-    }
-    return html;
-}
-
-// ==================== 渲染密钥数据 ====================
-function renderKeyData(info) {
-    var el = document.getElementById('keyDataPanel');
-    if (!el) return;
-    var ki = info.key_info;
-    if (!ki) { el.innerHTML = '<div class="text-slate500">无密钥数据</div>'; return; }
-
-    var html = '';
-
-    // RSA 密钥
-    if (ki.rsa) {
-        html += '<div style="margin-bottom:12px">';
-        html += '<div style="color:#60a5fa;font-weight:700;margin-bottom:6px">RSA 密钥对 ('+info.rsa_bits+'位)</div>';
-        html += '<div class="data-row"><span class="data-key">公钥 e (指数)</span><span class="data-val font-mono" style="color:#4ade80">'+esc(String(ki.rsa.public_key.e))+'</span></div>';
-        html += '<div class="data-row"><span class="data-key">公钥 n (模数)</span><span class="data-val font-mono" style="color:#4ade80;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.rsa.public_key.n.substring(0,80))+'... ('+ki.rsa.public_key.n_bits+'位)</span></div>';
-        html += '<div class="data-row"><span class="data-key">私钥 d</span><span class="data-val font-mono" style="color:#fbbf24;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.rsa.private_key.d.substring(0,80))+'... ('+ki.rsa.private_key.d_bits+'位)</span></div>';
-        if (ki.rsa.public_key_file) html += '<div class="data-row"><span class="data-key">公钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.rsa.public_key_file)+'</span></div>';
-        if (ki.rsa.private_key_file) html += '<div class="data-row"><span class="data-key">私钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.rsa.private_key_file)+'</span></div>';
-        html += '</div>';
-    }
-
-    // DH 密钥
-    if (ki.dh) {
-        html += '<div style="margin-bottom:12px">';
-        html += '<div style="color:#f59e0b;font-weight:700;margin-bottom:6px">DH 密钥协商</div>';
-        html += '<div class="data-row"><span class="data-key">DH私钥</span><span class="data-val font-mono" style="color:#fbbf24;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.private_key.substring(0,60))+'...</span></div>';
-        html += '<div class="data-row"><span class="data-key">DH公钥</span><span class="data-val font-mono" style="color:#4ade80;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.public_key.substring(0,60))+'...</span></div>';
-        if (ki.dh.private_key_file) html += '<div class="data-row"><span class="data-key">DH私钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.dh.private_key_file)+'</span></div>';
-        if (ki.dh.public_key_file) html += '<div class="data-row"><span class="data-key">DH公钥文件</span><span class="data-val font-mono" style="color:#94a3b8;font-size:10px">'+esc(ki.dh.public_key_file)+'</span></div>';
-        if (ki.dh.shared_secret) html += '<div class="data-row"><span class="data-key">共享秘密</span><span class="data-val font-mono" style="color:#a78bfa;max-width:500px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(ki.dh.shared_secret.substring(0,60))+'...</span></div>';
-        html += '</div>';
-    }
-
-    // 会话密钥
-    if (ki.session) {
-        html += '<div style="margin-bottom:12px">';
-        html += '<div style="color:#10b981;font-weight:700;margin-bottom:6px">会话密钥 (已协商)</div>';
-        html += '<div class="data-row"><span class="data-key">AES-128密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(ki.session.aes_key)+'</span></div>';
-        html += '<div class="data-row"><span class="data-key">HMAC-SHA256密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(ki.session.hmac_key)+'</span></div>';
-        html += '</div>';
-    }
-
-    if (!ki.rsa && !ki.dh && !ki.session) {
-        html += '<div class="text-slate500" style="text-align:center;padding:8px 0">RSA密钥正在生成中...</div>';
-    }
-
-    el.innerHTML = html;
-}
-
-// ==================== 模式切换 ====================
-async function setMode(mode) {
-    var btnS = document.getElementById('btnModeSender');
-    var btnR = document.getElementById('btnModeReceiver');
-    var desc = document.getElementById('modeDesc');
-
-    // 先更新按钮视觉
-    if (mode === 'sender') {
-        btnS.className = 'btn btn-blue'; btnS.style.cssText = 'flex:1;padding:14px;font-size:16px';
-        btnR.className = 'btn'; btnR.style.cssText = 'flex:1;padding:14px;font-size:16px;background:#334155;color:#94a3b8';
-        desc.innerHTML = '<span style="color:#60a5fa">已选择发送端模式</span> — 你将主动连接接收端，输入接收端的 IP 和协商端口后点击「连接」';
-    } else {
-        btnR.className = 'btn btn-green'; btnR.style.cssText = 'flex:1;padding:14px;font-size:16px';
-        btnS.className = 'btn'; btnS.style.cssText = 'flex:1;padding:14px;font-size:16px;background:#334155;color:#94a3b8';
-        desc.innerHTML = '<span style="color:#4ade80">已选择接收端模式</span> — 你被动等待发送端连接，请将本机 IP 和协商端口告知发送端';
-    }
-
-    try {
-        var resp = await fetch('/api/set_mode', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode})});
-        var r = await resp.json();
-        if (r.success) {
-            currentMode = mode;
-            log(r.message, 'success');
-            applyModeUI(mode);
-        } else {
-            log('模式切换失败: '+(r.error||''), 'error');
-        }
-    } catch(e) {
-        // 即使API失败也更新UI（本地模式）
-        currentMode = mode;
-        applyModeUI(mode);
-        log('模式已本地切换为'+(mode==='sender'?'发送端':'接收端'), 'warn');
-    }
-}
-
-function applyModeUI(mode) {
-    if (mode === 'sender') {
-        show('senderPanel');
-        hide('receiverPanel');
-    } else {
-        hide('senderPanel');
-        show('receiverPanel');
-    }
-}
-
-// ==================== 渲染连接结果（5步密钥交换） ====================
-function renderConnect(r) {
-    var html = '';
-    (r.steps||[]).forEach(function(step) {
-        html += renderStepCard(step);
-    });
-    document.getElementById('connectResult').innerHTML = html;
-}
-
-// ==================== 加载系统信息 ====================
-async function loadInfo() {
-    try {
-        var resp = await fetch('/api/info?t=' + Date.now());
-        sysInfo = await resp.json();
-        document.getElementById('infoVersion').textContent = sysInfo.version || '-';
-        document.getElementById('infoHost').textContent = sysInfo.hostname;
-        document.getElementById('infoIP').textContent = sysInfo.ip;
-        document.getElementById('infoPort').textContent = sysInfo.listen_port;
-        document.getElementById('infoRSA').textContent = sysInfo.rsa_bits+' 位';
-        document.getElementById('infoScapy').textContent = sysInfo.scapy_available?'可用':'不可用';
-
-        // 渲染密钥数据面板
-        renderKeyData(sysInfo);
-
-        // 接收端面板的端口提示
-        var hint = document.getElementById('recvListenPortHint');
-        if (hint) hint.textContent = sysInfo.listen_port;
-
-        // 根据当前模式显示面板
-        currentMode = sysInfo.mode;
-        applyModeUI(currentMode);
-
-        // 更新模式按钮
-        if (currentMode === 'sender') {
-            document.getElementById('btnModeSender').className = 'btn btn-blue';
-            document.getElementById('btnModeSender').style.cssText = 'flex:1;padding:14px;font-size:16px';
-            document.getElementById('btnModeReceiver').className = 'btn';
-            document.getElementById('btnModeReceiver').style.cssText = 'flex:1;padding:14px;font-size:16px;background:#334155;color:#94a3b8';
-            document.getElementById('modeDesc').innerHTML = '<span style="color:#60a5fa">发送端模式</span> — 主动连接接收端';
-        } else {
-            document.getElementById('btnModeReceiver').className = 'btn btn-green';
-            document.getElementById('btnModeReceiver').style.cssText = 'flex:1;padding:14px;font-size:16px';
-            document.getElementById('btnModeSender').className = 'btn';
-            document.getElementById('btnModeSender').style.cssText = 'flex:1;padding:14px;font-size:16px;background:#334155;color:#94a3b8';
-            document.getElementById('modeDesc').innerHTML = '<span style="color:#4ade80">接收端模式</span> — 被动等待连接';
+            return html;
         }
 
-        // 不自动填写IP，由用户手动输入
-
-        updateConnUI(sysInfo.connection);
-
-        if (sysInfo.negotiate_server && sysInfo.negotiate_server.running) {
-            log('协商服务器运行中 (端口'+sysInfo.negotiate_server.port+')','success');
+        // === API 调用 ===
+        async function api(url, data) {
+            const opts = data ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data) } : {};
+            const resp = await fetch(url, opts);
+            return resp.json();
         }
-        log('系统信息加载完成','success');
-    } catch(e) { log('加载失败: '+e.message,'error'); }
-}
 
-function updateConnUI(c) {
-    if (!c) return;
-    var map = {
-        disconnected:{cls:'st-disconn',lbl:'未连接'},
-        connecting:{cls:'st-connecting',lbl:'连接中...'},
-        exchanging_rsa_keys:{cls:'st-negot',lbl:'交换RSA公钥中...'},
-        exchanging_dh_keys:{cls:'st-negot',lbl:'交换DH公钥中...'},
-        verifying_signatures:{cls:'st-negot',lbl:'验证签名中...'},
-        negotiating:{cls:'st-negot',lbl:'密钥协商中...'},
-        connected:{cls:'st-conn',lbl:'已连接'}
-    };
-    var s = map[c.status]||map.disconnected;
-    // 更新接收端面板状态
-    var recvDot = document.getElementById('recvDot');
-    var recvText = document.getElementById('recvText');
-    if (recvDot) recvDot.className = 'status-dot '+s.cls;
-    if (recvText) recvText.textContent = s.lbl;
-    var ri = document.getElementById('recvInfo');
-    if (c.peer_ip) {
-        ri.classList.remove('hidden');
-        ri.innerHTML = '对方: '+c.peer_ip+':'+(c.peer_listen_port||c.peer_port||'')+'<br>'+
-            (c.session_key?'会话密钥: '+c.session_key.substring(0,16)+'...':'');
-    }
-    // 更新发送端面板：连接成功后启用发送按钮
-    var btn = document.getElementById('btnSend');
-    if (btn) btn.disabled = (c.status !== 'connected');
-    // 发送端面板也显示连接状态
-    var senderStatus = document.getElementById('senderConnStatus');
-    if (senderStatus) {
-        senderStatus.innerHTML = '<span class="status-dot '+s.cls+'"></span> <span style="color:'+(c.status==='connected'?'#4ade80':'#94a3b8')+'">'+s.lbl+'</span>';
-    }
-}
-
-// ==================== 发送端操作 ====================
-async function doConnect() {
-    var host = document.getElementById('targetHost').value.trim();
-    var port = document.getElementById('targetPort').value.trim();
-    if (!host) { log('请输入接收端IP地址','warn'); return; }
-    var btn = document.getElementById('btnConnect');
-    btn.disabled = true; btn.textContent = '连接中...';
-    log('正在连接 '+host+':'+port+' ...','info');
-    log('提示: 连接的是对方容器的9999端口(协商端口)，不是5001(Web端口)','info');
-    try {
-        var resp = await fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
-        var r = await resp.json();
-        show('connectResult');
-        renderConnect(r);
-        if (r.success) {
-            log('连接成功！5步密钥协商全部完成','success');
-        } else {
-            var errMsg = r.error || '未知错误';
-        log('连接失败: ' + errMsg, 'error');
-        // 显示详细错误堆栈
-        if (r.detail) {
-            log('详细错误: ' + r.detail.substring(0, 200), 'error');
+        async function loadInfo() {
+            try {
+                const r = await api('/api/info?t=' + Date.now());
+                Object.assign(info, { hostname:r.hostname, ip:r.ip, listen_port:r.listen_port, rsa_bits:r.rsa_bits, scapy_available:r.scapy_available, version:r.version });
+                version.value = r.version || '';
+                mode.value = r.mode || 'sender';
+                if (r.key_info) {
+                    keyInfo.rsa = r.key_info.rsa || null;
+                    keyInfo.dh = r.key_info.dh || null;
+                    keyInfo.session = r.key_info.session || null;
+                }
+                if (r.connection) {
+                    Object.assign(conn, r.connection);
+                }
+            } catch(e) {}
         }
-        // 给出具体排查建议
-        if (errMsg.indexOf('超时') >= 0 || errMsg.indexOf('timeout') >= 0) {
-            log('排查: 1)对方协商服务器是否启动 2)防火墙是否开放'+port+'端口 3)网络是否互通', 'warn');
-        } else if (errMsg.indexOf('拒绝') >= 0 || errMsg.indexOf('refused') >= 0) {
-            log('排查: 对方9999端口未监听，请确认接收端容器正常运行，点"重启协商服务器"', 'warn');
-        } else if (errMsg.indexOf('断开') >= 0 || errMsg.indexOf('reset') >= 0) {
-            log('排查: 连接被对方重置，可能是对方协商服务器异常，请接收端点"重启协商服务器"', 'warn');
+
+        async function refreshConn() {
+            try {
+                const r = await api('/api/connection_status?t=' + Date.now());
+                if (r.status) Object.assign(conn, r);
+                if (r.negotiate_steps) negotiateSteps.value = r.negotiate_steps;
+            } catch(e) {}
         }
+
+        async function refreshRecv() {
+            try {
+                const r = await api('/api/received_data?t=' + Date.now());
+                receivedData.value = r.data || [];
+            } catch(e) {}
         }
-    } catch(e) { log('请求失败: '+e.message,'error'); }
-    finally { btn.disabled=false; btn.textContent='连接'; loadInfo(); }
-}
 
-async function doCapture() {
-    var count = parseInt(document.getElementById('captureCount').value)||5;
-    var filterEl = document.getElementById('captureFilter');
-    var filter = filterEl ? filterEl.value : 'ip';
-    if (filter === 'custom') {
-        filter = document.getElementById('captureCustomFilter').value.trim() || 'ip';
-    }
-    var btn = document.getElementById('btnCapture');
-    btn.disabled=true; btn.textContent='抓取中...';
-    log('开始抓取 '+count+' 个数据包 (过滤器: '+filter+')...','info');
-    try {
-        var resp = await fetch('/api/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:count,timeout:20,filter:filter})});
-        var r = await resp.json();
-        if (r.success) {
-            capturedData = r.json_data;
-            document.getElementById('sendData').value = capturedData;
-            log('抓取成功！共 '+r.count+' 个数据包','success');
-            show('captureResult');
-            renderCapture(r);
-        } else { log('抓取失败: '+(r.error||''),'error'); }
-    } catch(e) { log('请求失败: '+e.message,'error'); }
-    finally { btn.disabled=false; btn.textContent='抓取数据包'; }
-}
-
-// 抓取对方IP的数据包（自动根据当前连接状态生成BPF过滤器）
-async function capturePeer() {
-    var peerIP = '';
-    // 从连接状态获取对方IP
-    if (sysInfo && sysInfo.connection && sysInfo.connection.peer_ip) {
-        peerIP = sysInfo.connection.peer_ip;
-    }
-    // 发送端也可以从输入框获取
-    if (!peerIP) {
-        var hostInput = document.getElementById('targetHost');
-        if (hostInput && hostInput.value.trim()) {
-            peerIP = hostInput.value.trim();
+        async function setMode(m) {
+            try {
+                const r = await api('/api/set_mode', {mode:m});
+                if (r.success) {
+                    mode.value = m;
+                    // 立即清空UI
+                    connectSteps.value = [];
+                    sendSteps.value = [];
+                    negotiateSteps.value = [];
+                    receivedData.value = [];
+                    log(r.message, 'success');
+                    await loadInfo();
+                } else {
+                    log('模式切换失败: '+(r.error||''), 'error');
+                }
+            } catch(e) { log('模式切换失败: '+e.message, 'error'); }
         }
-    }
-    if (!peerIP) {
-        log('无法确定对方IP，请先连接或手动输入对方IP','warn');
-        return;
-    }
-    // 设置过滤器为对方IP
-    var filterEl = document.getElementById('captureFilter');
-    filterEl.value = 'custom';
-    document.getElementById('captureCustomFilter').classList.remove('hidden');
-    document.getElementById('captureCustomFilter').value = 'host ' + peerIP;
-    log('已设置过滤器: host '+peerIP+'，开始抓取...','info');
-    await doCapture();
-}
 
-// 自定义过滤器切换
-document.getElementById('captureFilter').addEventListener('change', function() {
-    if (this.value === 'custom') {
-        document.getElementById('captureCustomFilter').classList.remove('hidden');
-    } else {
-        document.getElementById('captureCustomFilter').classList.add('hidden');
-    }
-});
+        async function doConnect() {
+            if (!targetHost.value.trim()) { log('请输入接收端IP地址','warn'); return; }
+            loading.connect = true;
+            connectSteps.value = [];
+            log('正在连接 '+targetHost.value+':'+targetPort.value+' ...','info');
+            try {
+                const r = await api('/api/connect', {host:targetHost.value.trim(), port:parseInt(targetPort.value)});
+                if (r.steps) connectSteps.value = r.steps;
+                if (r.success) {
+                    log('连接成功！5步密钥协商全部完成','success');
+                } else {
+                    log('连接失败: '+(r.error||''),'error');
+                    if (r.detail) log('详细: '+String(r.detail).substring(0,200),'error');
+                }
+            } catch(e) { log('请求失败: '+e.message,'error'); }
+            finally { loading.connect = false; await loadInfo(); }
+        }
 
-function renderCapture(r) {
-    var html = '';
-    if (r.capture_log && r.capture_log.length>0) {
-        html += '<div class="step-card"><div class="font-bold text-sm mb2" style="color:#f59e0b">&#128270; 抓包过程</div>';
-        r.capture_log.forEach(function(entry) {
-            var ec = {init:'#60a5fa',interface:'#a78bfa',start:'#f59e0b',packet:'#10b981',done:'#3b82f6',error:'#ef4444'}[entry.event]||'#94a3b8';
-            html += '<div class="capture-log-line"><span class="time">['+esc(entry.time)+']</span> <span class="event" style="color:'+ec+'">['+esc(entry.event)+']</span> <span class="detail">'+esc(entry.detail)+'</span></div>';
+        async function resetConnection() {
+            log('断开连接...','info');
+            try {
+                const r = await api('/api/reset_connection', {});
+                log(r.message,'success');
+                // 立即清空所有UI
+                connectSteps.value = [];
+                sendSteps.value = [];
+                negotiateSteps.value = [];
+                receivedData.value = [];
+                Object.assign(conn, {status:'disconnected', peer_ip:null, peer_port:null, peer_listen_port:null, session_key:null, hmac_key:null, peer_verified:false});
+                await loadInfo();
+            } catch(e) { log('断开失败: '+e.message,'error'); }
+        }
+
+        async function regenerateKeys() {
+            loading.regenerate = true;
+            regenResult.text = '重新生成中...'; regenResult.color = '#fbbf24';
+            try {
+                const r = await api('/api/regenerate_keys', {});
+                if (r.success) {
+                    regenResult.text = r.message; regenResult.color = '#4ade80';
+                    log(r.message,'success');
+                    await loadInfo();
+                } else {
+                    regenResult.text = r.error||'失败'; regenResult.color = '#f87171';
+                    log('重新生成失败: '+(r.error||''),'error');
+                }
+            } catch(e) { regenResult.text = '失败'; regenResult.color = '#f87171'; log('重新生成失败: '+e.message,'error'); }
+            finally { loading.regenerate = false; }
+        }
+
+        async function restartNegotiate() {
+            log('重启协商服务器...','info');
+            try {
+                const r = await api('/api/restart_negotiate', {});
+                if (r.success) {
+                    log('协商服务器已重启，密钥已重新生成','success');
+                    negotiateSteps.value = [];
+                    receivedData.value = [];
+                    await loadInfo();
+                } else { log('重启失败: '+(r.error||''),'error'); }
+                await refreshConn();
+            } catch(e) { log('重启失败: '+e.message,'error'); }
+        }
+
+        async function doSend() {
+            if (!sendData.value.trim()) { log('没有可发送的数据','warn'); return; }
+            loading.send = true;
+            sendSteps.value = [];
+            log('正在加密并发送数据...','info');
+            try {
+                const r = await api('/api/send', {data:sendData.value});
+                if (r.steps) sendSteps.value = r.steps;
+                if (r.success) log('数据加密发送成功！','success');
+                else log('发送失败: '+(r.error||''),'error');
+            } catch(e) { log('请求失败: '+e.message,'error'); }
+            finally { loading.send = false; await loadInfo(); }
+        }
+
+        async function doCapture() {
+            loading.capture = true;
+            const filter = captureFilter.value === 'custom' ? (captureCustomFilter.value.trim()||'ip') : captureFilter.value;
+            log('开始抓取 '+captureCount.value+' 个数据包 (过滤器: '+filter+')...','info');
+            try {
+                const r = await api('/api/capture', {count:parseInt(captureCount.value), timeout:20, filter});
+                if (r.success) {
+                    sendData.value = r.json_data || '';
+                    log('抓取成功！共 '+r.count+' 个数据包','success');
+                } else { log('抓取失败: '+(r.error||''),'error'); }
+            } catch(e) { log('请求失败: '+e.message,'error'); }
+            finally { loading.capture = false; }
+        }
+
+        async function capturePeer() {
+            let peerIP = conn.peer_ip || targetHost.value.trim();
+            if (!peerIP) { log('无法确定对方IP，请先连接或手动输入','warn'); return; }
+            captureFilter.value = 'custom';
+            captureCustomFilter.value = 'host ' + peerIP;
+            log('已设置过滤器: host '+peerIP,'info');
+            await doCapture();
+        }
+
+        async function testTcp() {
+            if (!targetHost.value.trim()) { log('请输入目标IP','warn'); return; }
+            testResult.value = '测试中...';
+            try {
+                const r = await api('/api/test_tcp', {host:targetHost.value.trim(), port:parseInt(targetPort.value)});
+                testResult.value = r.success ? '连通!' : (r.error||'失败');
+                if (r.results) r.results.forEach(item => log('  '+item.step+': '+(item.ok?'通过':'失败')+' '+item.detail, item.ok?'success':'error'));
+            } catch(e) { testResult.value = '失败'; }
+        }
+
+        async function debugConnect() {
+            if (!targetHost.value.trim()) { log('请输入目标IP','warn'); return; }
+            log('调试连接...','info');
+            try {
+                const r = await api('/api/debug_connect', {host:targetHost.value.trim(), port:parseInt(targetPort.value)});
+                if (r.results) r.results.forEach(item => log('  '+item.step+': '+(item.ok?'通过':'失败')+' '+item.detail, item.ok?'success':'error'));
+                if (r.success) log('调试结论: 连接正常','success');
+                else log('调试结论: 连接有问题','error');
+            } catch(e) { log('调试失败: '+e.message,'error'); }
+        }
+
+        async function checkHealth() {
+            testResult.value = '检查中...';
+            try {
+                const r = await api('/api/health?t='+Date.now());
+                testResult.value = r.port_listening ? '本机服务正常' : '协商服务器未运行!';
+                log(r.port_listening ? '协商服务器正常监听' : '协商服务器未运行!', r.port_listening?'success':'error');
+            } catch(e) { testResult.value = '检查失败'; }
+        }
+
+        async function testAlgo() {
+            log('正在测试所有算法...','info');
+            try {
+                const r = await api('/api/test_algo', {});
+                algoResults.value = r;
+                log('算法测试完成','success');
+            } catch(e) { log('测试失败: '+e.message,'error'); }
+        }
+
+        // === 定时刷新 ===
+        let timer = null;
+        onMounted(() => {
+            loadInfo().then(() => log('系统信息加载完成','success'));
+            timer = setInterval(() => {
+                refreshConn();
+                loadInfo();
+                if (mode.value === 'receiver') refreshRecv();
+            }, 2000);
         });
-        html += '</div>';
+        onUnmounted(() => { if (timer) clearInterval(timer); });
+
+        return {
+            info, version, mode, keyInfo, conn,
+            targetHost, targetPort, sendData, captureCount, captureFilter, captureCustomFilter,
+            loading, testResult, regenResult,
+            connectSteps, sendSteps, negotiateSteps, receivedData, logs, algoResults,
+            connStatusClass, connStatusLabel,
+            log, truncate, esc, renderDetail,
+            loadInfo, refreshConn, refreshRecv, setMode,
+            doConnect, resetConnection, regenerateKeys, restartNegotiate,
+            doSend, doCapture, capturePeer,
+            testTcp, debugConnect, checkHealth, testAlgo
+        };
     }
-    html += '<div class="step-card"><div class="data-row"><span class="data-key">数据包数量</span><span class="data-val">'+r.count+'</span></div><div class="data-row"><span class="data-key">保存位置</span><span class="data-val">'+esc(r.saved_to)+'</span></div></div>';
-    (r.packets||[]).forEach(function(p) {
-        var protoColor = {TCP:'#60a5fa',UDP:'#4ade80',ICMP:'#fbbf24',ARP:'#c084fc'}[p.protocol]||'#94a3b8';
-        html += '<div class="step-card">';
-        html += '<div class="pkt-header" onclick="togglePkt(\'pkt_'+p.id+'\')">';
-        html += '<span class="step-num" style="width:22px;height:22px;font-size:11px;background:'+protoColor+'">'+p.id+'</span>';
-        html += '<span class="tag" style="background:'+protoColor+'22;color:'+protoColor+'">'+esc(p.protocol)+'</span>';
-        html += '<span class="text-xs text-slate400" style="flex:1">'+esc(p.summary||'')+'</span>';
-        html += '<span class="text-xs text-slate500">'+p.length+'B</span>';
-        html += '</div>';
-        html += '<div id="pkt_'+p.id+'" class="pkt-detail hidden">';
-        if (p.src_mac) html += '<div style="color:#a78bfa;font-weight:600;margin-bottom:4px">以太网层</div><div class="data-row"><span class="data-key">源MAC</span><span class="data-val">'+esc(p.src_mac)+'</span></div><div class="data-row"><span class="data-key">目标MAC</span><span class="data-val">'+esc(p.dst_mac)+'</span></div>';
-        if (p.src_ip) html += '<div style="color:#60a5fa;font-weight:600;margin:6px 0 4px">IP层</div><div class="data-row"><span class="data-key">源IP</span><span class="data-val">'+esc(p.src_ip)+'</span></div><div class="data-row"><span class="data-key">目标IP</span><span class="data-val">'+esc(p.dst_ip)+'</span></div><div class="data-row"><span class="data-key">TTL</span><span class="data-val">'+p.ttl+'</span></div>';
-        if (p.protocol==='TCP') html += '<div style="color:#4ade80;font-weight:600;margin:6px 0 4px">TCP层</div><div class="data-row"><span class="data-key">源端口</span><span class="data-val">'+esc(p.src_port)+'</span></div><div class="data-row"><span class="data-key">目标端口</span><span class="data-val">'+esc(p.dst_port)+'</span></div><div class="data-row"><span class="data-key">标志位</span><span class="data-val" style="color:#fbbf24">'+esc(p.tcp_flags)+'</span></div><div class="data-row"><span class="data-key">序列号</span><span class="data-val">'+p.seq_num+'</span></div><div class="data-row"><span class="data-key">确认号</span><span class="data-val">'+p.ack_num+'</span></div><div class="data-row"><span class="data-key">窗口大小</span><span class="data-val">'+p.window_size+'</span></div>';
-        if (p.protocol==='UDP') html += '<div style="color:#4ade80;font-weight:600;margin:6px 0 4px">UDP层</div><div class="data-row"><span class="data-key">源端口</span><span class="data-val">'+esc(p.src_port)+'</span></div><div class="data-row"><span class="data-key">目标端口</span><span class="data-val">'+esc(p.dst_port)+'</span></div>';
-        if (p.payload_length>0) html += '<div style="color:#f87171;font-weight:600;margin:6px 0 4px">载荷 ('+p.payload_length+'字节)</div><div class="data-row"><span class="data-key">十六进制</span><span class="data-val" style="font-size:10px;max-height:60px;overflow:hidden">'+esc(p.payload_hex.substring(0,200))+'...</span></div>';
-        html += '</div></div>';
-    });
-    document.getElementById('captureResult').innerHTML = html;
-}
-
-function togglePkt(id) { var el = document.getElementById(id); if (el) el.classList.toggle('hidden'); }
-
-async function doSend() {
-    var data = document.getElementById('sendData').value.trim();
-    if (!data) { log('没有可发送的数据','warn'); return; }
-    var btn = document.getElementById('btnSend');
-    btn.disabled=true; btn.textContent='加密发送中...';
-    log('正在加密并发送数据...','info');
-    try {
-        var resp = await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:data})});
-        var r = await resp.json();
-        if (r.success) log('数据加密发送成功！','success');
-        else log('发送失败: '+(r.error||''),'error');
-        show('sendResult');
-        var html = '';
-        (r.steps||[]).forEach(function(s) {
-            var sc = s.status==='success'?'#10b981':s.status==='error'?'#ef4444':'#3b82f6';
-            html += '<div class="step-card"><div class="flex items-center gap2 mb2"><span class="step-num" style="background:'+sc+'">'+s.id+'</span><span class="font-bold text-sm">'+esc(s.title)+'</span></div><div class="text-xs text-slate400 mb2">'+esc(s.description||'')+'</div>';
-            if (s.detail) html += renderDetail(s.detail);
-            html += '</div>';
-        });
-        document.getElementById('sendResult').innerHTML = html;
-    } catch(e) { log('请求失败: '+e.message,'error'); }
-    finally { btn.disabled=false; btn.textContent='加密并发送'; loadInfo(); }
-}
-
-// ==================== 接收端操作 ====================
-async function refreshRecv() {
-    try {
-        var resp = await fetch('/api/received_data?t=' + Date.now());
-        var r = await resp.json();
-        var el = document.getElementById('recvList');
-        if (r.count===0) { el.innerHTML='<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div>'; return; }
-        var html = '';
-        r.data.forEach(function(item,i) {
-            // 如果有steps，用步骤卡片渲染解密过程
-            if (item.steps && item.steps.length > 0) {
-                var allOk = item.hmac_valid && item.sig_verified;
-                html += '<div class="step-card" style="border-color:'+(allOk?'#10b981':'#ef4444')+'"><div class="flex items-center gap2 mb2"><span class="step-num" style="background:'+(allOk?'#10b981':'#ef4444')+'">'+(i+1)+'</span><span class="font-bold text-sm" style="color:'+(allOk?'#4ade80':'#f87171')+'">'+(allOk?'解密成功':'解密失败')+'</span><span class="text-xs text-slate500">'+esc(item.time)+'</span></div>';
-                item.steps.forEach(function(s) {
-                    var sc = s.status==='success'?'#10b981':s.status==='error'?'#ef4444':'#3b82f6';
-                    html += '<div style="margin:8px 0;padding:8px 12px;border-left:3px solid '+sc+';background:'+sc+'11;border-radius:0 6px 6px 0">';
-                    html += '<div class="flex items-center gap2 mb1"><span class="step-num" style="background:'+sc+';width:20px;height:20px;font-size:10px">'+s.id+'</span><span class="font-bold text-sm">'+esc(s.title)+'</span></div>';
-                    html += '<div class="text-xs text-slate400 mb1">'+esc(s.description||'')+'</div>';
-                    if (s.data) {
-                        Object.keys(s.data).forEach(function(k) {
-                            var val = String(s.data[k]);
-                            var valColor = val.indexOf('通过')>=0?'#4ade80':val.indexOf('失败')>=0?'#f87171':'#e2e8f0';
-                            var isLong = val.length > 80;
-                            html += '<div class="data-row"><span class="data-key">'+esc(k)+'</span><span class="data-val font-mono" style="color:'+valColor+';'+(isLong?'word-break:break-all;font-size:10px':'')+'">'+esc(val)+'</span></div>';
-                        });
-                    }
-                    html += '</div>';
-                });
-                html += '</div>';
-            } else if (item.hmac_valid) {
-                // 兼容旧数据
-                var decData = item.decrypted_data || '';
-                var shortData = decData.length > 500 ? decData.substring(0,500) + '...(共'+decData.length+'字符)' : decData;
-                html += '<div class="step-card"><div class="flex items-center gap2 mb2"><span class="step-num">'+(i+1)+'</span><span class="font-bold text-sm text-green400">验证通过</span><span class="text-xs text-slate500">'+esc(item.time)+'</span></div><div class="data-row"><span class="data-key">HMAC验证</span><span class="data-val" style="color:#10b981">通过 (完整性)</span></div><div class="data-row"><span class="data-key">RSA签名验证</span><span class="data-val" style="color:#10b981">'+(item.sig_verified?'通过 (真实性)':'未验证')+'</span></div><div class="data-row"><span class="data-key">解密数据</span><span class="data-val" style="white-space:pre-wrap;max-height:300px;overflow-y:auto;display:block">'+esc(shortData)+'</span></div><div class="data-row"><span class="data-key">数据长度</span><span class="data-val">'+decData.length+' 字符</span></div><div class="data-row"><span class="data-key">保存文件</span><span class="data-val" style="color:#94a3b8;font-size:10px">'+esc(item.saved_to||'未保存')+'</span></div><div class="data-row"><span class="data-key">会话密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(item.session_key_hex||'-')+'</span></div><div class="data-row"><span class="data-key">HMAC密钥</span><span class="data-val font-mono" style="color:#4ade80">'+esc(item.hmac_key_hex||'-')+'</span></div></div>';
-            } else {
-                html += '<div class="step-card" style="border-color:#ef4444"><div class="flex items-center gap2 mb2"><span class="step-num" style="background:#ef4444">'+(i+1)+'</span><span class="font-bold text-sm text-red400">验证失败</span></div><div class="text-red400 text-sm">'+esc(item.error||'HMAC验证失败')+'</div></div>';
-            }
-        });
-        el.innerHTML = html;
-        log('已刷新，共 '+r.count+' 条','info');
-    } catch(e) { log('刷新失败: '+e.message,'error'); }
-}
-
-async function refreshConn() {
-    try {
-        var resp = await fetch('/api/connection_status?t=' + Date.now());
-        var c = await resp.json();
-        updateConnUI(c);
-        log('连接状态: '+c.status,'info');
-        // 接收端：渲染协商步骤
-        if (c.negotiate_steps && c.negotiate_steps.length > 0) {
-            var el = document.getElementById('recvNegotiateSteps');
-            if (el) {
-                var html = '';
-                c.negotiate_steps.forEach(function(step) {
-                    html += renderStepCard(step);
-                });
-                el.innerHTML = html;
-            }
-        }
-    } catch(e) { log('刷新失败: '+e.message,'error'); }
-}
-
-// ==================== 通用操作 ====================
-async function testAlgo() {
-    log('正在测试所有算法...','info');
-    try {
-        var resp = await fetch('/api/test_algo',{method:'POST'});
-        var r = await resp.json();
-        var el = document.getElementById('algoResult');
-        var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-        for (var name in r) {
-            var pass = r[name]==='通过';
-            html += '<div class="step-card" style="text-align:center"><div class="font-bold '+(pass?'text-green400':'text-red400')+'">'+esc(name)+'</div><div class="'+(pass?'text-green400':'text-red400')+'">'+(pass?'通过':esc(r[name]))+'</div></div>';
-        }
-        html += '</div>';
-        el.innerHTML = html;
-        log('算法测试完成','success');
-    } catch(e) { log('测试失败: '+e.message,'error'); }
-}
-
-async function testTcp() {
-    var host = document.getElementById('targetHost').value.trim();
-    var port = document.getElementById('targetPort').value.trim();
-    if (!host) { log('请输入目标IP','warn'); return; }
-    var el = document.getElementById('testResult');
-    el.textContent = '测试中...'; el.style.color = '#fbbf24';
-    try {
-        var resp = await fetch('/api/test_tcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
-        var r = await resp.json();
-        if (r.success) {
-            el.textContent = '连通!'; el.style.color = '#4ade80';
-            log('TCP连通性测试: '+host+':'+port+' 可达','success');
-        } else {
-            el.textContent = r.error||'失败'; el.style.color = '#f87171';
-            log('TCP测试失败: '+(r.error||''),'error');
-        }
-        if (r.results) r.results.forEach(function(item) { log('  '+item.step+': '+(item.ok?'通过':'失败')+' '+item.detail, item.ok?'success':'error'); });
-    } catch(e) { el.textContent = '失败'; el.style.color = '#f87171'; log('测试失败: '+e.message,'error'); }
-}
-
-async function debugConnect() {
-    var host = document.getElementById('targetHost').value.trim();
-    var port = document.getElementById('targetPort').value.trim();
-    if (!host) { log('请输入目标IP','warn'); return; }
-    log('调试连接: 逐步测试 '+host+':'+port+' ...','info');
-    try {
-        var resp = await fetch('/api/debug_connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,port:parseInt(port)})});
-        var r = await resp.json();
-        (r.results||[]).forEach(function(item) {
-            log('  '+item.step+': '+(item.ok?'通过':'失败')+' '+item.detail, item.ok?'success':'error');
-        });
-        if (r.success) log('调试结论: 连接正常，可以尝试正式连接','success');
-        else log('调试结论: 连接有问题，请检查上述步骤','error');
-    } catch(e) { log('调试失败: '+e.message,'error'); }
-}
-
-async function checkHealth() {
-    var el = document.getElementById('testResult');
-    el.textContent = '检查中...'; el.style.color = '#fbbf24';
-    try {
-        var resp = await fetch('/api/health?t=' + Date.now());
-        var r = await resp.json();
-        if (r.port_listening) {
-            el.textContent = '本机服务正常'; el.style.color = '#4ade80';
-            log('协商服务器在端口'+r.listen_port+'正常监听','success');
-        } else {
-            el.textContent = '协商服务器未运行!'; el.style.color = '#f87171';
-            log('协商服务器未运行! 请点"重启协商服务器"','error');
-        }
-        // 显示网络诊断信息
-        if (r.network_debug) {
-            var nd = r.network_debug;
-            log('本机IP: '+(nd.outbound_ip||nd.ip||'未知'), 'info');
-            if (nd.scapy_ifaces) {
-                nd.scapy_ifaces.forEach(function(iface) {
-                    log('网卡: '+iface.name+' IP: '+iface.ip, 'info');
-                });
-            }
-        }
-        // 抓包诊断
-        try {
-            var resp2 = await fetch('/api/capture_diag?t=' + Date.now());
-            var cd = await resp2.json();
-            log('抓包库: '+(cd.scapy_available?'可用':'不可用'), cd.scapy_available?'success':'error');
-            log('自动选择网卡: '+(cd.auto_selected_iface||'无'), 'info');
-            if (cd.sniff_test) log('抓包测试: '+cd.sniff_test, cd.sniff_test.indexOf('成功')>=0||cd.sniff_test.indexOf('OK')>=0?'success':'error');
-            if (cd.issues && cd.issues.length > 0) cd.issues.forEach(function(issue) { log('问题: '+issue, 'error'); });
-        } catch(e) { log('抓包诊断失败: '+e.message, 'error'); }
-    } catch(e) { el.textContent = '检查失败'; el.style.color = '#f87171'; log('检查失败: '+e.message,'error'); }
-}
-
-async function restartNegotiate() {
-    log('重启协商服务器...','info');
-    try {
-        var resp = await fetch('/api/restart_negotiate',{method:'POST'});
-        var r = await resp.json();
-        if (r.success) {
-            log('协商服务器已重启，状态已重置','success');
-            // 立即更新UI
-            updateConnUI({status: 'disconnected', peer_ip: '', negotiate_steps: []});
-            var el = document.getElementById('recvNegotiateSteps');
-            if (el) el.innerHTML = '<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">等待发送端连接后显示协商过程...</div>';
-        }
-        else { log('重启失败: '+(r.error||''),'error'); }
-        refreshConn();
-    } catch(e) { log('重启失败: '+e.message,'error'); }
-}
-
-async function resetConnection() {
-    log('断开连接...','info');
-    try {
-        var resp = await fetch('/api/reset_connection',{method:'POST'});
-        var r = await resp.json();
-        log(r.message,'success');
-        // 立即更新UI
-        updateConnUI({status: 'disconnected', peer_ip: '', negotiate_steps: []});
-        var el = document.getElementById('recvNegotiateSteps');
-        if (el) el.innerHTML = '<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">等待发送端连接后显示协商过程...</div>';
-        refreshConn();
-        loadInfo();
-    } catch(e) { log('断开失败: '+e.message,'error'); }
-}
-
-async function regenerateKeys() {
-    var el = document.getElementById('customKeyResult');
-    el.textContent = '重新生成中...'; el.style.color = '#fbbf24';
-    try {
-        var resp = await fetch('/api/regenerate_keys',{method:'POST',headers:{'Cache-Control':'no-cache'}});
-        var r = await resp.json();
-        if (r.success) {
-            el.textContent = r.message; el.style.color = '#4ade80';
-            log(r.message,'success');
-            await loadInfo();
-        } else {
-            el.textContent = r.error||'失败'; el.style.color = '#f87171';
-            log('重新生成失败: '+(r.error||''),'error');
-        }
-    } catch(e) { el.textContent = '失败'; el.style.color = '#f87171'; log('重新生成失败: '+e.message,'error'); }
-}
-
-// 定时刷新密钥数据（轻量，只更新密钥面板）
-async function refreshKeyData() {
-    try {
-        var resp = await fetch('/api/info?t=' + Date.now());
-        var info = await resp.json();
-        sysInfo = info;
-        renderKeyData(info);
-        updateConnUI(info.connection);
-    } catch(e) {}
-}
-
-// 定时刷新连接状态（接收端和发送端都刷新）
-setInterval(function() {
-    refreshConn();
-    refreshKeyData();
-    // 接收端：任何状态都刷新，特别是 negotiating 时让用户看到变化
-    if (currentMode === 'receiver') {
-        refreshRecv();
-    }
-}, 2000);
-
-loadInfo();
+}).mount('#app');
 </script>
 </body>
 </html>

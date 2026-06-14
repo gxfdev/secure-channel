@@ -567,7 +567,7 @@ def api_connect():
         _connection_state['status'] = 'exchanging_dh_keys'
 
         if not _dh_peer or _dh_peer.shared_secret is not None:
-            _dh_peer = DHPeer(bits=256)
+            _dh_peer = DHPeer()
             _save_dh_keys()
         my_dh_public = _dh_peer.get_public_key()
 
@@ -961,7 +961,7 @@ def start_negotiate_server():
                     peer_dh_signature = bytes.fromhex(dh_req['dh_signature'])
 
                     if not _dh_peer or _dh_peer.shared_secret is not None:
-                        _dh_peer = DHPeer(bits=256)
+                        _dh_peer = DHPeer()
                     my_dh_public = _dh_peer.get_public_key()
                     my_dh_private = _dh_peer.private_key
                     _save_dh_keys()
@@ -1477,8 +1477,8 @@ def test_algo():
 
     try:
         from dh import DHPeer
-        alice = DHPeer(bits=256)
-        bob = DHPeer(bits=256)
+        alice = DHPeer()
+        bob = DHPeer()
         alice.compute_shared_secret(bob.get_public_key())
         bob.compute_shared_secret(alice.get_public_key())
         results['DH'] = '通过' if alice.get_session_key() == bob.get_session_key() else '失败'

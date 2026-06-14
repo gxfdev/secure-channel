@@ -69,12 +69,12 @@ def _generate_prime(bits):
             return n
 
 
-def generate_keypair(bits=512):
+def generate_keypair(bits=1024):
     """
     生成 RSA 密钥对
-    参数: bits - 密钥位数（默认512位，教学用途）
+    参数: bits - 密钥位数（默认1024位）
     返回: ((e, n), (d, n)) - 公钥和私钥
-    流程: 1.生成两个大素数p,q → 2.计算n=p*q → 3.计算φ(n)=(p-1)(q-1) → 4.选e → 5.算d=e^(-1) mod φ(n)
+    流程: 1.生成两个大素数p,q → 2.计算n=p*q → 3.计算φ(n)=(p-1)(q-1) → 4.随机选e → 5.算d=e^(-1) mod φ(n)
     """
     print(f"  正在生成 {bits} 位 RSA 密钥对...")
     half_bits = bits // 2  # 每个素数占一半位数
@@ -84,13 +84,22 @@ def generate_keypair(bits=512):
         q = _generate_prime(half_bits)
     n = p * q  # 计算模数n = p * q
     phi_n = (p - 1) * (q - 1)  # 计算欧拉函数φ(n) = (p-1)(q-1)
-    e = 65537  # 公钥指数e，通常取65537（2^16+1，费马素数）
-    if _gcd(e, phi_n) != 1:  # 如果65537与φ(n)不互素
-        e = 3  # 从3开始尝试
-        while _gcd(e, phi_n) != 1:  # 找到与φ(n)互素的e
-            e += 2  # 只尝试奇数（偶数一定与φ(n)不互素）
+    # 随机选择公钥指数e：在 [3, 65537] 范围内随机选取与φ(n)互素的奇数
+    # 优先尝试常用费马素数（65537, 257, 17, 5, 3），若都不行则随机
+    fermat_primes = [65537, 257, 17, 5, 3]
+    random.shuffle(fermat_primes)  # 随机打乱顺序
+    e = None
+    for candidate in fermat_primes:
+        if candidate < phi_n and _gcd(candidate, phi_n) == 1:
+            e = candidate
+            break
+    if e is None:
+        # 随机生成e：在 [2^16+1, 2^20] 范围内随机选奇数
+        e = random.randrange(65537, 1 << 20, 2)
+        while _gcd(e, phi_n) != 1:
+            e = random.randrange(3, min(phi_n, 1 << 20), 2)
     d = mod_inverse(e, phi_n)  # 计算私钥指数d = e^(-1) mod φ(n)
-    print(f"  RSA 密钥对生成完成！n 位数: {n.bit_length()}")
+    print(f"  RSA 密钥对生成完成！n 位数: {n.bit_length()}, e = {e}")
     return (e, n), (d, n)  # 返回公钥(e,n)和私钥(d,n)
 
 
