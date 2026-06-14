@@ -511,7 +511,8 @@ createApp({
                     keyInfo.session = r.key_info.session || null;
                 }
                 if (r.connection) {
-                    Object.assign(conn, r.connection);
+                    const connFields = ['status','peer_ip','peer_port','peer_listen_port','session_key','hmac_key','peer_verified','peer_public_key'];
+                    connFields.forEach(k => { if (r.connection[k] !== undefined) conn[k] = r.connection[k]; });
                 }
             } catch(e) {}
         }
@@ -519,7 +520,11 @@ createApp({
         async function refreshConn() {
             try {
                 const r = await api('/api/connection_status?t=' + Date.now());
-                if (r.status) Object.assign(conn, r);
+                if (r.status) {
+                    // 只更新 conn 中定义的字段，避免注入 negotiate_steps 等无关属性
+                    const connFields = ['status','peer_ip','peer_port','peer_listen_port','session_key','hmac_key','peer_verified','peer_public_key'];
+                    connFields.forEach(k => { if (r[k] !== undefined) conn[k] = r[k]; });
+                }
                 if (r.negotiate_steps) negotiateSteps.value = r.negotiate_steps;
             } catch(e) {}
         }

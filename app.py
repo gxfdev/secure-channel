@@ -390,8 +390,7 @@ def set_mode():
     negotiate_msg = ''
     if MODE == 'receiver':
         start_negotiate_server()
-        # start_negotiate_server 内部已等待 server_ready，额外确认状态
-        time.sleep(1)
+        # start_negotiate_server 内部已通过 server_ready.wait() 同步等待
         if _negotiate_server_status.get('running'):
             negotiate_msg = '，协商服务器已启动'
         elif _negotiate_server_status.get('error'):
@@ -832,8 +831,6 @@ def restart_negotiate():
     # 仅接收端启动协商服务器
     if MODE == 'receiver':
         start_negotiate_server()
-        # 额外等待确认启动结果
-        time.sleep(0.5)
 
     result = {'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']}
     if MODE == 'receiver' and not _negotiate_server_status.get('running'):
@@ -943,8 +940,8 @@ def start_negotiate_server():
                     _active_conn = conn
 
                 prev_status = _connection_state['status']
-                _connection_state['peer_ip'] = addr[0]
-                _connection_state['peer_port'] = addr[1]
+                prev_peer_ip = _connection_state['peer_ip']
+                prev_peer_port = _connection_state['peer_port']
 
                 req_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
                 req_data = _recv_exact(conn, req_len)
@@ -963,7 +960,7 @@ def start_negotiate_server():
                     conn.close()
                     continue
 
-                # Handle ping
+                # Handle ping — 不修改连接状态
                 if req.get('type') == 'ping':
                     try:
                         pong = json.dumps({'type': 'pong', 'mode': MODE, 'listen_port': LISTEN_PORT}).encode()
@@ -971,17 +968,25 @@ def start_negotiate_server():
                     except:
                         pass
                     conn.close()
-                    _connection_state['status'] = prev_status
                     continue
 
-                # Handle data transfer
+                # Handle data transfer — 不修改连接状态中的 peer_ip/peer_port
                 elif req.get('type') == 'data_transfer':
                     if _dh_peer and _dh_peer.get_session_key():
                         _handle_data_transfer(conn, req)
+                    else:
+                        print(f"  [Negotiate Server] Data transfer rejected: no session key")
+                        try:
+                            err = json.dumps({'type': 'error', 'message': 'No session key'}).encode()
+                            conn.sendall(struct.pack('>I', len(err)) + err)
+                        except:
+                            pass
                     conn.close()
                     continue
 
-                # Key negotiation
+                # Key negotiation — 更新连接状态
+                _connection_state['peer_ip'] = addr[0]
+                _connection_state['peer_port'] = addr[1]
                 _connection_state['status'] = 'negotiating'
                 _negotiate_steps = []
 
@@ -1240,12 +1245,17 @@ def _handle_data_transfer(conn, req):
             'status': 'success' if hmac_valid else 'error'
         })
 
-        sig_verified = rsa_verify(ct, signature, _connection_state.get('peer_public_key_raw', get_rsa_keys()[0]))
+        peer_rsa_pub = _connection_state.get('peer_public_key_raw')
+        if peer_rsa_pub:
+            sig_verified = rsa_verify(ct, signature, peer_rsa_pub)
+        else:
+            sig_verified = False
         steps.append({
             'id': 3, 'title': 'RSA 数字签名验证',
             'description': '用发送端 RSA 公钥验证签名，确保不可否认性',
             'data': {
                 '算法': 'RSA-SHA256',
+                '对方公钥': '已获取' if peer_rsa_pub else '未获取（无法验证）',
                 '结果': '通过 - 来源可信' if sig_verified else '失败 - 来源不可信！',
             },
             'status': 'success' if sig_verified else 'error'
@@ -1300,6 +1310,18 @@ def _handle_data_transfer(conn, req):
 
         _latest_received = record
 
+        # 发送确认响应给发送端
+        try:
+            ack_msg = json.dumps({
+                'type': 'data_ack',
+                'success': hmac_valid and sig_verified,
+                'hmac_valid': hmac_valid,
+                'sig_verified': sig_verified,
+            }).encode()
+            conn.sendall(struct.pack('>I', len(ack_msg)) + ack_msg)
+        except:
+            pass
+
     except Exception as e:
         _latest_received = {
             'time': time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1313,6 +1335,12 @@ def _handle_data_transfer(conn, req):
                 'status': 'error'
             }]
         }
+        # 发送错误确认给发送端
+        try:
+            err_ack = json.dumps({'type': 'data_ack', 'success': False, 'error': str(e)}).encode()
+            conn.sendall(struct.pack('>I', len(err_ack)) + err_ack)
+        except:
+            pass
 
 
 def _recv_exact(sock, n, timeout=30):
@@ -1505,6 +1533,20 @@ def api_send():
             send_sock.sendall(struct.pack('>I', len(transfer_msg)) + transfer_msg)
             send_sock.sendall(struct.pack('>I', len(packet)) + packet)
             send_sock.sendall(struct.pack('>I', len(signature)) + signature)
+
+            # 等待接收端确认
+            recv_ack_detail = ''
+            try:
+                ack_len_data = _recv_exact(send_sock, 4, timeout=5)
+                ack_len = struct.unpack('>I', ack_len_data)[0]
+                if ack_len > 0 and ack_len < 10000:
+                    ack_data = _recv_exact(send_sock, ack_len, timeout=5)
+                    ack = json.loads(ack_data.decode())
+                    if ack.get('type') == 'data_ack':
+                        recv_ack_detail = f"接收端确认: HMAC={'通过' if ack.get('hmac_valid') else '失败'}, 签名={'通过' if ack.get('sig_verified') else '失败'}"
+            except:
+                recv_ack_detail = '未收到接收端确认（数据可能已送达）'
+
             send_sock.close()
         except Exception as e:
             return jsonify({'success': False, 'error': f'发送失败：{e}', 'steps': steps})
@@ -1515,6 +1557,7 @@ def api_send():
             'detail': {
                 '状态': '成功',
                 '发送目标': f'{peer_ip}:{peer_port}',
+                '接收端确认': recv_ack_detail or '未收到确认',
             }
         })
 
