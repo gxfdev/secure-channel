@@ -380,17 +380,26 @@ def set_mode():
         _key_files['priv'] = os.path.abspath(priv_path)
     _dh_peer = None
 
-    # 3. 停止旧的协商服务器
+    # 3. 停止旧的协商服务器（确保完全停止后再启动新的）
     _stop_negotiate_server()
 
     # 4. 切换模式
     MODE = new_mode
 
     # 5. 仅接收端启动协商服务器，发送端不需要监听
+    negotiate_msg = ''
     if MODE == 'receiver':
         start_negotiate_server()
+        # 等待服务器启动完成，检查状态
+        time.sleep(0.5)
+        if _negotiate_server_status.get('running'):
+            negotiate_msg = '，协商服务器已启动'
+        elif _negotiate_server_status.get('error'):
+            negotiate_msg = f'，协商服务器启动失败: {_negotiate_server_status["error"]}'
+        else:
+            negotiate_msg = '，协商服务器启动中...'
 
-    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，密钥已重新生成' + ('，协商服务器已启动' if MODE=='receiver' else '')})
+    return jsonify({'success': True, 'mode': MODE, 'negotiate_server': _negotiate_server_status, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，密钥已重新生成' + negotiate_msg})
 
 
 # ==================== Key Management API ====================
@@ -852,8 +861,8 @@ def _stop_negotiate_server():
         _negotiate_server_thread.join(timeout=5)
     _negotiate_server_thread = None
 
-    # 额外等待端口释放（Windows 上 SO_REUSEADDR 不一定立即生效）
-    time.sleep(0.3)
+    # 额外等待端口释放（Windows/Docker 上 SO_REUSEADDR 不一定立即生效）
+    time.sleep(1)
 
     _negotiate_server_status = {'running': False, 'port': None, 'error': None}
 

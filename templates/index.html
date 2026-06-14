@@ -290,6 +290,9 @@
                     &bull; 发送端需要连接到 <b>本机IP:本机协商端口</b> 才能建立连接<br>
                     &bull; 连接建立后，接收端会自动完成密钥协商和数据解密
                 </div>
+                <div v-if="info.negotiate_server && !info.negotiate_server.running" class="mt2 text-xs" style="color:#f87171;background:#1c0a0a;padding:4px 8px;border-radius:4px">
+                    协商服务器未运行！请点击「重启协商服务器」
+                </div>
             </div>
 
             <div class="mb4">
@@ -497,7 +500,7 @@ createApp({
         async function loadInfo() {
             try {
                 const r = await api('/api/info?t=' + Date.now());
-                Object.assign(info, { hostname:r.hostname, ip:r.ip, listen_port:r.listen_port, rsa_bits:r.rsa_bits, scapy_available:r.scapy_available, version:r.version });
+                Object.assign(info, { hostname:r.hostname, ip:r.ip, listen_port:r.listen_port, rsa_bits:r.rsa_bits, scapy_available:r.scapy_available, version:r.version, negotiate_server:r.negotiate_server });
                 version.value = r.version || '';
                 mode.value = r.mode || 'sender';
                 if (r.key_info) {
@@ -536,6 +539,9 @@ createApp({
                     sendSteps.value = [];
                     negotiateSteps.value = [];
                     receivedData.value = [];
+                    capturePackets.value = [];
+                    captureLog.value = [];
+                    captureSavedTo.value = '';
                     log(r.message, 'success');
                     await loadInfo();
                 } else {
