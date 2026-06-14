@@ -68,6 +68,7 @@ _negotiate_server_status = {'running': False, 'port': None, 'error': None}
 _negotiate_steps = []
 _negotiate_server_running = False
 _negotiate_server_sock = None
+_negotiate_server_thread = None
 
 
 def _get_local_ip():
@@ -369,7 +370,9 @@ def set_mode():
             _negotiate_server_sock.close()
         except:
             pass
-    time.sleep(0.5)
+    # 等待旧线程退出
+    if _negotiate_server_thread and _negotiate_server_thread.is_alive():
+        _negotiate_server_thread.join(timeout=2)
     _negotiate_server_thread = None
 
     # 4. 切换模式
@@ -786,7 +789,7 @@ def reset_connection():
 
 @app.route('/api/restart_negotiate', methods=['POST'])
 def restart_negotiate():
-    global _negotiate_server_running, _negotiate_server_status, _negotiate_server_sock, _negotiate_steps, _connection_state, _dh_peer, _rsa_keys, _received_data
+    global _negotiate_server_running, _negotiate_server_status, _negotiate_server_sock, _negotiate_steps, _connection_state, _dh_peer, _rsa_keys, _received_data, _negotiate_server_thread
     # 重置连接状态和协商步骤
     _reset_connection_state()
     _negotiate_steps = []
@@ -811,7 +814,9 @@ def restart_negotiate():
 
     _negotiate_server_running = False
     _negotiate_server_status = {'running': False, 'port': None, 'error': None}
-    time.sleep(0.5)
+    # 等待旧线程退出
+    if _negotiate_server_thread and _negotiate_server_thread.is_alive():
+        _negotiate_server_thread.join(timeout=2)
     start_negotiate_server()
     return jsonify({'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']})
 
@@ -1068,6 +1073,11 @@ def start_negotiate_server():
                 if _connection_state['status'] not in ('connected', 'disconnected'):
                     _connection_state['status'] = 'disconnected'
                 continue
+            except OSError:
+                # socket被关闭（模式切换/重启），正常退出
+                if not _negotiate_server_running:
+                    break
+                continue
             except ConnectionError as e:
                 print(f"  [Negotiate Server] Connection error: {e}")
                 # 连接错误时重置状态
@@ -1091,6 +1101,8 @@ def start_negotiate_server():
 
     thread = threading.Thread(target=server_thread, daemon=True)
     thread.start()
+    global _negotiate_server_thread
+    _negotiate_server_thread = thread
 
 
 def _handle_data_transfer(conn, req):

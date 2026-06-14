@@ -645,7 +645,7 @@ createApp({
             timer = setInterval(() => {
                 refreshConn();
                 loadInfo();
-                if (mode.value === 'receiver') refreshRecv();
+                refreshRecv();  // 两种模式都刷新接收数据
             }, 2000);
         });
         onUnmounted(() => { if (timer) clearInterval(timer); });
