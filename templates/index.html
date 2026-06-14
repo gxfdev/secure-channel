@@ -221,6 +221,7 @@
                 <div v-if="capturePackets.length" class="mt2 capture-result-area">
                     <div class="flex items-center gap2 mb2 flex-wrap">
                         <div class="text-xs font-bold" style="color:#a78bfa">抓包结果 ({{filteredCapturePackets.length}}/{{capturePackets.length}} 个数据包)</div>
+                        <div v-if="captureSavedTo" class="text-xs" style="color:#64748b;background:#1e293b;padding:2px 8px;border-radius:4px">保存路径: {{captureSavedTo}}</div>
                         <div class="flex gap2">
                             <button v-for="pf in ['all','TCP','UDP','ICMP','ARP']" :key="pf"
                                 class="btn btn-sm" :style="{background: captureProtocolFilter===pf?'#7c3aed':'#334155', color: captureProtocolFilter===pf?'#fff':'#94a3b8', padding:'2px 10px', fontSize:'11px'}"
@@ -415,6 +416,7 @@ createApp({
         const capturePackets = ref([]);   // 抓包结果：数据包详情列表
         const captureLog = ref([]);       // 抓包过程日志
         const captureProtocolFilter = ref('all'); // 协议筛选: all/TCP/UDP/ICMP/ARP
+        const captureSavedTo = ref('');   // 抓包数据保存路径
         const logs = ref([]);
         const algoResults = ref(null);
 
@@ -629,7 +631,8 @@ createApp({
                     capturePackets.value = r.packets || [];
                     captureLog.value = r.capture_log || [];
                     captureProtocolFilter.value = 'all';
-                    log('抓取成功！共 '+r.count+' 个数据包','success');
+                    captureSavedTo.value = r.saved_to || '';
+                    log('抓取成功！共 '+r.count+' 个数据包，已保存至 '+captureSavedTo.value,'success');
                     // 自动滚动到抓包结果区域
                     nextTick(() => {
                         const el = document.querySelector('[ref="captureResultArea"]') || document.querySelector('.capture-result-area');
@@ -702,7 +705,7 @@ createApp({
 
         return {
             info, version, mode, keyInfo, conn,
-            targetHost, targetPort, sendData, captureCount, captureFilter, captureCustomFilter, captureProtocolFilter,
+            targetHost, targetPort, sendData, captureCount, captureFilter, captureCustomFilter, captureProtocolFilter, captureSavedTo,
             loading, testResult, regenResult,
             connectSteps, sendSteps, negotiateSteps, receivedData, capturePackets, filteredCapturePackets, captureLog, logs, algoResults,
             connStatusClass, connStatusLabel,
