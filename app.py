@@ -382,10 +382,11 @@ def set_mode():
     # 4. 切换模式
     MODE = new_mode
 
-    # 5. 重启协商服务器
-    start_negotiate_server()
+    # 5. 仅接收端启动协商服务器，发送端不需要监听
+    if MODE == 'receiver':
+        start_negotiate_server()
 
-    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，密钥已重新生成，协商服务器已重启'})
+    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，密钥已重新生成' + ('，协商服务器已启动' if MODE=='receiver' else '')})
 
 
 # ==================== Key Management API ====================
@@ -811,7 +812,9 @@ def restart_negotiate():
     # 安全停止旧协商服务器
     _stop_negotiate_server()
 
-    start_negotiate_server()
+    # 仅接收端启动协商服务器
+    if MODE == 'receiver':
+        start_negotiate_server()
     return jsonify({'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']})
 
 
@@ -1579,15 +1582,18 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
 
-    # 启动协商服务器
-    print("  正在启动协商服务器...")
-    try:
-        start_negotiate_server()
-        print("  协商服务器启动完成")
-    except Exception as e:
-        print(f"  协商服务器启动失败: {e}")
-        import traceback
-        traceback.print_exc()
+    # 启动协商服务器（仅接收端需要监听，发送端主动连接对方）
+    if MODE == 'receiver':
+        print("  正在启动协商服务器...")
+        try:
+            start_negotiate_server()
+            print("  协商服务器启动完成")
+        except Exception as e:
+            print(f"  协商服务器启动失败: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("  发送端模式，跳过协商服务器启动（主动连接对方）")
 
     # 启动 Flask
     print(f"  正在启动 Flask 服务 ({FLASK_HOST}:{FLASK_PORT})...")
