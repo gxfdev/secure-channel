@@ -80,6 +80,8 @@ _negotiate_steps = []
 _negotiate_server_running = False
 _negotiate_server_sock = None
 _negotiate_server_thread = None
+_active_conn = None       # 当前活跃的协商连接 socket，用于强制关闭
+_active_conn_lock = threading.Lock()
 
 
 def _get_local_ip():
@@ -817,9 +819,18 @@ def restart_negotiate():
 
 def _stop_negotiate_server():
     """安全停止协商服务器，确保旧线程完全退出、端口释放。"""
-    global _negotiate_server_running, _negotiate_server_sock, _negotiate_server_thread, _negotiate_server_status
+    global _negotiate_server_running, _negotiate_server_sock, _negotiate_server_thread, _negotiate_server_status, _active_conn
 
     _negotiate_server_running = False
+
+    # 先关闭活跃连接，让阻塞在 recv 上的线程退出
+    with _active_conn_lock:
+        if _active_conn:
+            try:
+                _active_conn.close()
+            except:
+                pass
+            _active_conn = None
 
     # 关闭 server socket，让 accept() 抛出 OSError 从而退出循环
     if _negotiate_server_sock:
@@ -859,12 +870,24 @@ def start_negotiate_server():
     server_error = [None]  # 用列表传递异常信息
 
     def server_thread():
-        global _dh_peer, _connection_state, _negotiate_server_status, _negotiate_server_running, _negotiate_steps, _negotiate_server_sock
+        global _dh_peer, _connection_state, _negotiate_server_status, _negotiate_server_running, _negotiate_steps, _negotiate_server_sock, _active_conn
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_sock.settimeout(300)
-            server_sock.bind(('0.0.0.0', LISTEN_PORT))
+            # 端口绑定重试（最多3次，每次间隔1秒）
+            bind_ok = False
+            for attempt in range(3):
+                try:
+                    server_sock.bind(('0.0.0.0', LISTEN_PORT))
+                    bind_ok = True
+                    break
+                except OSError as be:
+                    print(f"  [Negotiate Server] Bind attempt {attempt+1}/3 failed: {be}")
+                    if attempt < 2:
+                        time.sleep(1)
+            if not bind_ok:
+                raise OSError(f"端口 {LISTEN_PORT} 绑定失败（重试3次后仍被占用）")
             server_sock.listen(5)
             _negotiate_server_sock = server_sock
             print(f"  [Negotiate Server] Listening on 0.0.0.0:{LISTEN_PORT}")
@@ -885,6 +908,10 @@ def start_negotiate_server():
                 conn, addr = server_sock.accept()
                 conn.settimeout(30)
                 print(f"  [Negotiate Server] Connection from {addr}")
+
+                # 跟踪活跃连接，以便停止服务器时能强制关闭
+                with _active_conn_lock:
+                    _active_conn = conn
 
                 prev_status = _connection_state['status']
                 _connection_state['peer_ip'] = addr[0]
@@ -1096,12 +1123,10 @@ def start_negotiate_server():
                 # 超时时如果状态卡在协商中，重置为未连接
                 if _connection_state['status'] not in ('connected', 'disconnected'):
                     _connection_state['status'] = 'disconnected'
-                continue
             except OSError:
                 # socket被关闭（模式切换/重启），正常退出
                 if not _negotiate_server_running:
                     break
-                continue
             except ConnectionError as e:
                 print(f"  [Negotiate Server] Connection error: {e}")
                 # 连接错误时重置状态
@@ -1110,7 +1135,6 @@ def start_negotiate_server():
                 if conn:
                     try: conn.close()
                     except: pass
-                continue
             except Exception as e:
                 print(f"  [Negotiate Server] Error: {e}")
                 import traceback
@@ -1121,7 +1145,11 @@ def start_negotiate_server():
                 if conn:
                     try: conn.close()
                     except: pass
-                continue
+            finally:
+                # 每次连接处理完毕后清除活跃连接引用
+                with _active_conn_lock:
+                    if _active_conn is conn:
+                        _active_conn = None
 
     thread = threading.Thread(target=server_thread, daemon=True)
     thread.start()

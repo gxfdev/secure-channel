@@ -217,6 +217,32 @@
                     <button class="btn btn-sm" style="background:#7c3aed;color:#fff" @click="capturePeer">抓取对方IP</button>
                     <button class="btn btn-orange btn-sm" @click="doCapture" :disabled="loading.capture">{{loading.capture?'抓取中...':'抓取数据包'}}</button>
                 </div>
+                <!-- 抓包结果展示 -->
+                <div v-if="capturePackets.length" class="mt2">
+                    <div class="text-xs font-bold mb1" style="color:#a78bfa">抓包结果 ({{capturePackets.length}} 个数据包)</div>
+                    <div v-for="pkt in capturePackets" :key="pkt.id" class="step-card" style="border-color:#4c1d95;padding:8px 12px;margin-bottom:6px">
+                        <div class="flex items-center gap2 mb1">
+                            <span class="step-num" style="background:#7c3aed;width:22px;height:22px;font-size:10px">{{pkt.id}}</span>
+                            <span class="font-bold text-xs" style="color:#c4b5fd">{{pkt.summary || 'Unknown'}}</span>
+                            <span class="text-xs text-slate500" style="margin-left:auto">{{pkt.timestamp_precise || pkt.timestamp}}</span>
+                        </div>
+                        <div class="flex gap4 flex-wrap text-xs" style="color:#94a3b8">
+                            <span v-if="pkt.src_ip">SRC: <b style="color:#e2e8f0">{{pkt.src_ip}}<span v-if="pkt.src_port">:{{pkt.src_port}}</span></b></span>
+                            <span v-if="pkt.dst_ip">DST: <b style="color:#e2e8f0">{{pkt.dst_ip}}<span v-if="pkt.dst_port">:{{pkt.dst_port}}</span></b></span>
+                            <span v-if="pkt.protocol">协议: <b style="color:#e2e8f0">{{pkt.protocol}}</b></span>
+                            <span v-if="pkt.length">长度: <b style="color:#e2e8f0">{{pkt.length}}B</b></span>
+                            <span v-if="pkt.tcp_flags">标志: <b style="color:#e2e8f0">{{pkt.tcp_flags}}</b></span>
+                            <span v-if="pkt.ttl">TTL: <b style="color:#e2e8f0">{{pkt.ttl}}</b></span>
+                        </div>
+                        <div v-if="pkt.payload" class="mt1 text-xs" style="color:#64748b;word-break:break-all;max-height:60px;overflow:auto">
+                            载荷: {{pkt.payload.length > 200 ? pkt.payload.substring(0,200)+'...' : pkt.payload}}
+                        </div>
+                    </div>
+                </div>
+                <div v-if="captureLog.length && !capturePackets.length" class="mt2">
+                    <div class="text-xs text-slate500">抓包过程:</div>
+                    <div v-for="(l, i) in captureLog" :key="i" class="text-xs" style="color:#64748b">[{{l.time}}] {{l.detail}}</div>
+                </div>
             </div>
 
             <!-- 3. 发送 -->
@@ -377,6 +403,8 @@ createApp({
         const sendSteps = ref([]);
         const negotiateSteps = ref([]);
         const receivedData = ref([]);
+        const capturePackets = ref([]);   // 抓包结果：数据包详情列表
+        const captureLog = ref([]);       // 抓包过程日志
         const logs = ref([]);
         const algoResults = ref(null);
 
@@ -584,6 +612,8 @@ createApp({
                 const r = await api('/api/capture', {count:parseInt(captureCount.value), timeout:20, filter});
                 if (r.success) {
                     sendData.value = r.json_data || '';
+                    capturePackets.value = r.packets || [];
+                    captureLog.value = r.capture_log || [];
                     log('抓取成功！共 '+r.count+' 个数据包','success');
                 } else { log('抓取失败: '+(r.error||''),'error'); }
             } catch(e) { log('请求失败: '+e.message,'error'); }
@@ -654,7 +684,7 @@ createApp({
             info, version, mode, keyInfo, conn,
             targetHost, targetPort, sendData, captureCount, captureFilter, captureCustomFilter,
             loading, testResult, regenResult,
-            connectSteps, sendSteps, negotiateSteps, receivedData, logs, algoResults,
+            connectSteps, sendSteps, negotiateSteps, receivedData, capturePackets, captureLog, logs, algoResults,
             connStatusClass, connStatusLabel,
             log, truncate, esc, renderDetail,
             loadInfo, refreshConn, refreshRecv, setMode,
