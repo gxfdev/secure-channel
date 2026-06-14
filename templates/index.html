@@ -205,17 +205,12 @@
                 <div class="flex gap2 mb2 flex-wrap">
                     <input v-model="captureCount" class="input" style="width:70px" placeholder="数量">
                     <select v-model="captureFilter" class="input" style="width:220px">
-                        <option value="">所有流量(含ARP)</option>
-                        <option value="ip">所有IP流量</option>
-                        <option value="tcp">仅TCP流量</option>
-                        <option value="udp">仅UDP流量</option>
-                        <option value="icmp">仅ICMP流量</option>
-                        <option value="arp">仅ARP流量</option>
-                        <option value="tcp and not port 5000">TCP(排除Web端口)</option>
-                        <option value="tcp port 9999">仅协商端口(9999)</option>
-                        <option value="custom">自定义BPF过滤器...</option>
+                        <option value="ip">IP</option>
+                        <option value="tcp">TCP</option>
+                        <option value="udp">UDP</option>
+                        <option value="icmp">ICMP</option>
+                        <option value="arp">ARP</option>
                     </select>
-                    <input v-if="captureFilter==='custom'" v-model="captureCustomFilter" class="input" style="width:260px" placeholder="如: host 192.168.1.1 and tcp">
                     <button class="btn btn-sm" style="background:#7c3aed;color:#fff" @click="capturePeer">抓取对方IP</button>
                     <button class="btn btn-orange btn-sm" @click="doCapture" :disabled="loading.capture">{{loading.capture?'抓取中...':'抓取数据包'}}</button>
                 </div>
@@ -410,7 +405,6 @@ createApp({
         const sendData = ref('');
         const captureCount = ref('5');
         const captureFilter = ref('ip');
-        const captureCustomFilter = ref('');
 
         // === 状态 ===
         const loading = reactive({ connect:false, send:false, capture:false, regenerate:false });
@@ -639,7 +633,7 @@ createApp({
 
         async function doCapture() {
             loading.capture = true;
-            const filter = captureFilter.value === 'custom' ? (captureCustomFilter.value.trim()||'ip') : captureFilter.value;
+            const filter = captureFilter.value;
             log('开始抓取 '+captureCount.value+' 个数据包 (过滤器: '+filter+')...','info');
             try {
                 const r = await api('/api/capture', {count:parseInt(captureCount.value), timeout:20, filter});
@@ -663,10 +657,21 @@ createApp({
         async function capturePeer() {
             let peerIP = conn.peer_ip || targetHost.value.trim();
             if (!peerIP) { log('无法确定对方IP，请先连接或手动输入','warn'); return; }
-            captureFilter.value = 'custom';
-            captureCustomFilter.value = 'host ' + peerIP;
-            log('已设置过滤器: host '+peerIP,'info');
-            await doCapture();
+            log('抓取对方 '+peerIP+' 的流量...','info');
+            try {
+                loading.capture = true;
+                const filter = 'host ' + peerIP;
+                const r = await api('/api/capture', {count:parseInt(captureCount.value), timeout:20, filter});
+                if (r.success) {
+                    sendData.value = r.json_data || '';
+                    capturePackets.value = r.packets || [];
+                    captureLog.value = r.capture_log || [];
+                    captureProtocolFilter.value = 'all';
+                    captureSavedTo.value = r.saved_to || '';
+                    log('抓取成功！共 '+r.count+' 个数据包','success');
+                } else { log('抓取失败: '+(r.error||''),'error'); }
+            } catch(e) { log('抓取失败: '+e.message,'error'); }
+            finally { loading.capture = false; }
         }
 
         async function testTcp() {
@@ -722,7 +727,7 @@ createApp({
 
         return {
             info, version, mode, keyInfo, conn,
-            targetHost, targetPort, sendData, captureCount, captureFilter, captureCustomFilter, captureProtocolFilter, captureSavedTo,
+            targetHost, targetPort, sendData, captureCount, captureFilter, captureProtocolFilter, captureSavedTo,
             loading, testResult, regenResult,
             connectSteps, sendSteps, negotiateSteps, receivedData, capturePackets, filteredCapturePackets, captureLog, logs, algoResults,
             connStatusClass, connStatusLabel,

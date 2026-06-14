@@ -83,6 +83,14 @@ _negotiate_server_thread = None
 _active_conn = None       # 当前活跃的协商连接 socket，用于强制关闭
 _active_conn_lock = threading.Lock()
 
+# 心跳检测：当连接建立后定期检测对方是否在线
+_heartbeat_thread = None
+_heartbeat_running = False
+_heartbeat_fail_count = 0
+_HEARTBEAT_INTERVAL = 3   # 心跳间隔（秒）
+_HEARTBEAT_TIMEOUT = 5    # 单次心跳超时（秒）
+_HEARTBEAT_MAX_FAIL = 3   # 连续失败次数阈值
+
 
 def _get_local_ip():
     for target in ['8.8.8.8', '1.1.1.1', '192.168.1.1', '10.0.0.1']:
@@ -127,6 +135,7 @@ def _save_dh_keys():
 
 def _reset_connection_state():
     global _dh_peer, _connection_state
+    _stop_heartbeat()  # 停止心跳检测
     _dh_peer = None
     _connection_state.update({
         'status': 'disconnected',
@@ -167,7 +176,68 @@ def _notify_peer_disconnect():
         pass
 
 
-# ==================== Page Routes ====================
+# ==================== Heartbeat Detection ====================
+
+def _start_heartbeat():
+    """启动心跳检测线程，定期检测对方是否在线"""
+    global _heartbeat_thread, _heartbeat_running, _heartbeat_fail_count
+    _stop_heartbeat()  # 先停止旧的
+    _heartbeat_fail_count = 0
+    _heartbeat_running = True
+
+    def heartbeat_loop():
+        global _heartbeat_fail_count, _heartbeat_running
+        print("  [Heartbeat] 心跳检测线程已启动")
+        while _heartbeat_running and _connection_state.get('status') == 'connected':
+            time.sleep(_HEARTBEAT_INTERVAL)
+            if not _heartbeat_running or _connection_state.get('status') != 'connected':
+                break
+
+            peer_ip = _connection_state.get('peer_ip')
+            peer_port = _connection_state.get('peer_listen_port')
+            if not peer_ip or not peer_port:
+                _heartbeat_fail_count += 1
+            else:
+                # 发送 TCP ping 检测对方是否在线
+                try:
+                    ping_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    ping_sock.settimeout(_HEARTBEAT_TIMEOUT)
+                    ping_sock.connect((peer_ip, int(peer_port)))
+                    ping_msg = json.dumps({'type': 'ping'}).encode()
+                    ping_sock.sendall(struct.pack('>I', len(ping_msg)) + ping_msg)
+                    # 等待 pong 响应
+                    resp_len_data = _recv_exact(ping_sock, 4, timeout=_HEARTBEAT_TIMEOUT)
+                    resp_len = struct.unpack('>I', resp_len_data)[0]
+                    if 0 < resp_len < 10000:
+                        resp_data = _recv_exact(ping_sock, resp_len, timeout=_HEARTBEAT_TIMEOUT)
+                        resp = json.loads(resp_data.decode())
+                        if resp.get('type') == 'pong':
+                            _heartbeat_fail_count = 0
+                    ping_sock.close()
+                except Exception as e:
+                    _heartbeat_fail_count += 1
+                    print(f"  [Heartbeat] ping 失败 ({_heartbeat_fail_count}/{_HEARTBEAT_MAX_FAIL}): {e}")
+
+            # 连续失败超过阈值，标记断开
+            if _heartbeat_fail_count >= _HEARTBEAT_MAX_FAIL:
+                print(f"  [Heartbeat] 连续 {_heartbeat_fail_count} 次心跳失败，标记连接断开")
+                _connection_state['status'] = 'disconnected'
+                _heartbeat_running = False
+                break
+
+        print("  [Heartbeat] 心跳检测线程已退出")
+
+    _heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+    _heartbeat_thread.start()
+
+
+def _stop_heartbeat():
+    """停止心跳检测线程"""
+    global _heartbeat_running, _heartbeat_thread
+    _heartbeat_running = False
+    if _heartbeat_thread and _heartbeat_thread.is_alive():
+        _heartbeat_thread.join(timeout=2)
+    _heartbeat_thread = None
 
 @app.route('/')
 def index():
@@ -686,6 +756,7 @@ def api_connect():
         _connection_state['session_key'] = session_key.hex()
         _connection_state['hmac_key'] = hmac_key.hex()
         _connection_state['status'] = 'connected'
+        _start_heartbeat()  # 启动心跳检测
 
         sock.close()
 
@@ -1130,6 +1201,7 @@ def start_negotiate_server():
                         _connection_state['session_key'] = session_key.hex()
                         _connection_state['hmac_key'] = hmac_key.hex()
                         _connection_state['status'] = 'connected'
+                        _start_heartbeat()  # 启动心跳检测
 
                         _negotiate_steps.append({
                             'id': 5,
