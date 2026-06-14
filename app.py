@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.7.0'
+APP_VERSION = '2.7.1'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -25,6 +25,15 @@ from dh import DHPeer
 from capture import capture_packets, packets_to_json, get_network_info, HAS_SCAPY
 
 app = Flask(__name__)
+
+# 禁用API响应缓存，确保前端实时刷新
+@app.after_request
+def add_no_cache_headers(response):
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 MODE = os.environ.get('MODE', 'sender') or 'sender'
 RECEIVER_HOST = os.environ.get('RECEIVER_HOST', '127.0.0.1') or '127.0.0.1'

@@ -499,7 +499,7 @@ function renderConnect(r) {
 // ==================== 加载系统信息 ====================
 async function loadInfo() {
     try {
-        var resp = await fetch('/api/info');
+        var resp = await fetch('/api/info?t=' + Date.now());
         sysInfo = await resp.json();
         document.getElementById('infoVersion').textContent = sysInfo.version || '-';
         document.getElementById('infoHost').textContent = sysInfo.hostname;
@@ -734,7 +734,7 @@ async function doSend() {
 // ==================== 接收端操作 ====================
 async function refreshRecv() {
     try {
-        var resp = await fetch('/api/received_data');
+        var resp = await fetch('/api/received_data?t=' + Date.now());
         var r = await resp.json();
         var el = document.getElementById('recvList');
         if (r.count===0) { el.innerHTML='<div class="text-sm text-slate500" style="text-align:center;padding:16px 0">暂无接收数据</div>'; return; }
@@ -776,7 +776,7 @@ async function refreshRecv() {
 
 async function refreshConn() {
     try {
-        var resp = await fetch('/api/connection_status');
+        var resp = await fetch('/api/connection_status?t=' + Date.now());
         var c = await resp.json();
         updateConnUI(c);
         log('连接状态: '+c.status,'info');
@@ -852,7 +852,7 @@ async function checkHealth() {
     var el = document.getElementById('testResult');
     el.textContent = '检查中...'; el.style.color = '#fbbf24';
     try {
-        var resp = await fetch('/api/health');
+        var resp = await fetch('/api/health?t=' + Date.now());
         var r = await resp.json();
         if (r.port_listening) {
             el.textContent = '本机服务正常'; el.style.color = '#4ade80';
@@ -873,7 +873,7 @@ async function checkHealth() {
         }
         // 抓包诊断
         try {
-            var resp2 = await fetch('/api/capture_diag');
+            var resp2 = await fetch('/api/capture_diag?t=' + Date.now());
             var cd = await resp2.json();
             log('抓包库: '+(cd.scapy_available?'可用':'不可用'), cd.scapy_available?'success':'error');
             log('自动选择网卡: '+(cd.auto_selected_iface||'无'), 'info');
@@ -1012,12 +1012,13 @@ async function regenerateKeys() {
     var el = document.getElementById('customKeyResult');
     el.textContent = '重新生成中...'; el.style.color = '#fbbf24';
     try {
-        var resp = await fetch('/api/regenerate_keys',{method:'POST'});
+        var resp = await fetch('/api/regenerate_keys',{method:'POST',headers:{'Cache-Control':'no-cache'}});
         var r = await resp.json();
         if (r.success) {
             el.textContent = '所有密钥已随机重新生成'; el.style.color = '#4ade80';
             log('所有密钥已随机重新生成','success');
-            loadInfo();
+            // 强制刷新：加时间戳防缓存
+            await loadInfo();
         } else {
             el.textContent = r.error||'失败'; el.style.color = '#f87171';
             log('重新生成失败: '+(r.error||''),'error');
