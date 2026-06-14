@@ -889,9 +889,21 @@ async function regenerateKeys() {
     } catch(e) { el.textContent = '失败'; el.style.color = '#f87171'; log('重新生成失败: '+e.message,'error'); }
 }
 
+// 定时刷新密钥数据（轻量，只更新密钥面板）
+async function refreshKeyData() {
+    try {
+        var resp = await fetch('/api/info?t=' + Date.now());
+        var info = await resp.json();
+        sysInfo = info;
+        renderKeyData(info);
+        updateConnUI(info.connection);
+    } catch(e) {}
+}
+
 // 定时刷新连接状态（接收端和发送端都刷新）
 setInterval(function() {
     refreshConn();
+    refreshKeyData();
     // 接收端：任何状态都刷新，特别是 negotiating 时让用户看到变化
     if (currentMode === 'receiver') {
         refreshRecv();
