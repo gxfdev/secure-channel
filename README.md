@@ -1878,30 +1878,319 @@ def negotiate_as_sender(sock, rsa_pub, rsa_priv, dh_peer):
 
 ## 六、部署说明
 
-### Docker 部署
+### 1、项目结构
+
+```
+网安/
+├── app.py              # Flask 主应用（路由、密钥协商、数据收发）
+├── aes.py              # AES-128-CBC 对称加密自实现
+├── rsa.py              # RSA 公钥加密与数字签名自实现
+├── dh.py               # Diffie-Hellman 密钥协商自实现
+├── sha256.py           # SHA-256 哈希算法自实现
+├── hmac_sha256.py      # HMAC-SHA256 消息认证码自实现
+├── network.py          # TCP 网络传输（自定义协议、粘包处理）
+├── capture.py          # Scapy 网络数据包采集模块
+├── templates/
+│   └── index.html      # Web 前端界面
+├── Dockerfile          # Docker 镜像构建文件
+├── docker-compose.yml  # Docker Compose 编排文件
+├── Jenkinsfile         # Jenkins CI/CD 流水线
+├── requirements.txt    # Python 依赖
+└── README.md           # 项目说明文档
+```
+
+### 2、Docker 部署
+
+#### Dockerfile 说明
+
+```dockerfile
+FROM python:3.11-slim
+
+# 设置时区为中国标准时间
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+WORKDIR /app
+
+# 安装系统依赖（scapy 需要 tcpdump 和 libpcap-dev）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tcpdump \
+    libpcap-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制所有源代码
+COPY . .
+
+# Web 端口（Flask）和数据传输端口
+EXPOSE 5000
+EXPOSE 9999
+
+# 环境变量（可通过 docker run -e 覆盖）
+ENV MODE=sender
+ENV RECEIVER_HOST=127.0.0.1
+ENV RECEIVER_PORT=9999
+ENV LISTEN_PORT=9999
+ENV RSA_BITS=1024
+ENV DATA_DIR=/app/captured_data
+ENV FLASK_HOST=0.0.0.0
+ENV FLASK_PORT=5000
+
+# 数据目录可作为卷挂载
+VOLUME /app/captured_data
+
+CMD ["python", "app.py"]
+```
+
+#### 单机 Docker 部署
 
 ```bash
 # 构建镜像
 docker build -t secure-transport .
 
-# 发送端容器
-docker run -d --name sender -p 5000:5000 \
-  -e MODE=sender \
-  -e TARGET_HOST=10.0.0.2 \
+# 启动接收端（监听 9999 端口等待连接）
+docker run -d --name receiver \
+  --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  -v /root/captured_data:/app/captured_data \
+  -e MODE=receiver \
+  -e FLASK_HOST=0.0.0.0 \
+  -e LISTEN_PORT=9999 \
   secure-transport
 
-# 接收端容器
-docker run -d --name receiver -p 5000:5000 \
-  -e MODE=receiver \
+# 启动发送端（连接到接收端 IP）
+docker run -d --name sender \
+  --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  -v /root/captured_data:/app/captured_data \
+  -e MODE=sender \
+  -e RECEIVER_HOST=10.0.0.2 \
+  -e FLASK_HOST=0.0.0.0 \
+  -e RECEIVER_PORT=9999 \
   secure-transport
 ```
 
-### 环境变量
+**注意：** `--cap-add NET_ADMIN --cap-add NET_RAW` 是 Scapy 抓包所需的网络权限，`--network host` 使容器直接使用宿主机网络栈，避免 NAT 导致的连接问题。
+
+#### Docker Compose 部署
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+# 镜像配置 - 从阿里云ACR拉取或本地构建
+x-image: &default-image
+  image: ${DOCKER_IMAGE:-crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest}
+
+services:
+  # 发送端
+  sender:
+    <<: *default-image
+    container_name: netsec-sender
+    environment:
+      - MODE=sender
+      - RECEIVER_HOST=${RECEIVER_HOST:-127.0.0.1}
+      - RECEIVER_PORT=9999
+      - LISTEN_PORT=9999
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
+      - RSA_BITS=1024
+    network_mode: host
+    volumes:
+      - sender_data:/app/captured_data
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+  # 接收端
+  receiver:
+    <<: *default-image
+    container_name: netsec-receiver
+    environment:
+      - MODE=receiver
+      - LISTEN_PORT=9999
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5001
+      - RSA_BITS=1024
+    network_mode: host
+    volumes:
+      - receiver_data:/app/captured_data
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+volumes:
+  sender_data:
+  receiver_data:
+```
+
+```bash
+# 使用 docker-compose 启动（默认从阿里云 ACR 拉取镜像）
+RECEIVER_HOST=10.0.0.2 docker-compose up -d
+
+# 或本地构建后启动
+DOCKER_IMAGE=secure-transport docker-compose up -d
+```
+
+### 3、Jenkins CI/CD 流水线
+
+#### 流水线架构
+
+```
+┌─────────────┐    ┌─────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  拉取代码    │ →  │ 构建Docker   │ →  │ 推送镜像到    │ →  │ 部署到接收端  │ →  │ 部署到发送端  │
+│  git pull   │    │ 镜像         │    │ GHCR         │    │ node7        │    │ node8        │
+└─────────────┘    └─────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+```
+
+#### Jenkinsfile 说明
+
+```groovy
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_USER = 'gxfdev'
+        REPO_NAME = 'secure-channel'
+        TAG = "${env.BUILD_NUMBER}"
+        RECEIVER_IP = '192.168.157.207'   // 接收端 node7 的 IP
+        SENDER_IP = '192.168.157.208'     // 发送端 node8 的 IP
+        GHCR_PAT = credentials('github-ghcr-token')  // GitHub PAT 凭据
+    }
+
+    stages {
+        // 阶段1: 从 GitHub 拉取最新代码
+        stage('拉取代码') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/gxfdev/secure-channel.git',
+                    credentialsId: 'github-cred'
+            }
+        }
+
+        // 阶段2: 构建 Docker 镜像
+        stage('构建 Docker 镜像') {
+            steps {
+                script {
+                    docker.build("ghcr.io/${DOCKER_USER}/${REPO_NAME}:${TAG}")
+                }
+            }
+        }
+
+        // 阶段3: 推送镜像到 GitHub Container Registry
+        stage('推送镜像到 GitHub Container Registry') {
+            steps {
+                script {
+                    docker.withRegistry('https://ghcr.io', 'github-ghcr-token') {
+                        docker.image("ghcr.io/${DOCKER_USER}/${REPO_NAME}:${TAG}").push()
+                        docker.image("ghcr.io/${DOCKER_USER}/${REPO_NAME}:${TAG}").push("latest")
+                    }
+                }
+            }
+        }
+
+        // 阶段4: SSH 部署到接收端 node7
+        stage('部署到接收端 node7') {
+            steps {
+                sshPublisher(publishers: [
+                    sshPublisherDesc(configName: 'node7', transfers: [
+                        sshTransfer(execCommand: """
+                            echo '${GHCR_PAT}' | docker login ghcr.io -u ${DOCKER_USER} --password-stdin
+                            docker pull ghcr.io/${DOCKER_USER}/${REPO_NAME}:${TAG}
+                            docker stop netsec-receiver || true
+                            docker rm netsec-receiver || true
+                            docker run -d \\
+                              --name netsec-receiver \\
+                              --network host \\
+                              --cap-add NET_ADMIN --cap-add NET_RAW \\
+                              -v /root/captured_data:/app/captured_data \\
+                              -e MODE=receiver \\
+                              -e FLASK_HOST=0.0.0.0 \\
+                              -e LISTEN_PORT=9999 \\
+                              ghcr.io/${DOCKER_USER}/${REPO_NAME}:${TAG}
+                        """)
+                    ])
+                ])
+            }
+        }
+
+        // 阶段5: SSH 部署到发送端 node8
+        stage('部署到发送端 node8') {
+            steps {
+                sshPublisher(publishers: [
+                    sshPublisherDesc(configName: 'node8', transfers: [
+                        sshTransfer(execCommand: """
+                            echo '${GHCR_PAT}' | docker login ghcr.io -u ${DOCKER_USER} --password-stdin
+                            docker pull ghcr.io/${DOCKER_USER}/${REPO_NAME}:${TAG}
+                            docker stop netsec-sender || true
+                            docker rm netsec-sender || true
+                            docker run -d \\
+                              --name netsec-sender \\
+                              --network host \\
+                              --cap-add NET_ADMIN --cap-add NET_RAW \\
+                              -v /root/captured_data:/app/captured_data \\
+                              -e MODE=sender \\
+                              -e RECEIVER_HOST=${RECEIVER_IP} \\
+                              -e FLASK_HOST=0.0.0.0 \\
+                              -e RECEIVER_PORT=9999 \\
+                              ghcr.io/${DOCKER_USER}/${REPO_NAME}:${TAG}
+                        """)
+                    ])
+                ])
+            }
+        }
+    }
+
+    post {
+        success { echo '流水线执行成功！两个节点均已更新。' }
+        failure { echo '流水线执行失败，请检查控制台输出。' }
+    }
+}
+```
+
+#### Jenkins 配置要求
+
+| 配置项 | 说明 |
+|-------|------|
+| 凭据 `github-cred` | GitHub 用户名+密码/PAT，用于拉取代码 |
+| 凭据 `github-ghcr-token` | GitHub PAT（Secret text），用于推送/拉取 GHCR 镜像 |
+| SSH 节点 `node7` | 接收端服务器 SSH 连接配置（192.168.157.207） |
+| SSH 节点 `node8` | 发送端服务器 SSH 连接配置（192.168.157.208） |
+| 插件 `SSH Pipeline Steps` | 提供 `sshPublisher` 命令，用于远程部署 |
+
+### 4、环境变量
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | MODE | 运行模式: sender / receiver | sender |
-| TARGET_HOST | 对端IP地址 | 127.0.0.1 |
-| LISTEN_PORT | 监听端口 | 9999 |
-| RSA_BITS | RSA密钥位数 | 2048 |
+| RECEIVER_HOST | 对端IP地址（发送端使用） | 127.0.0.1 |
+| RECEIVER_PORT | 对端端口（发送端使用） | 9999 |
+| LISTEN_PORT | 监听端口（接收端使用） | 9999 |
+| RSA_BITS | RSA密钥位数 | 1024 |
 | DH_BITS | DH私钥位数 | 512 |
+| FLASK_HOST | Web服务监听地址 | 0.0.0.0 |
+| FLASK_PORT | Web服务端口 | 5000 |
+| DATA_DIR | 抓包数据存储目录 | /app/captured_data |
+
+### 5、本地开发运行
+
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 方式1: 直接运行（默认发送端模式）
+python app.py
+
+# 方式2: 通过环境变量指定模式
+MODE=receiver python app.py
+
+# 方式3: 在 Python 中设置环境变量后运行
+export MODE=sender
+export RECEIVER_HOST=10.0.0.2
+python app.py
+```
