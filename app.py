@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.8.0'
+APP_VERSION = '2.9.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -1513,19 +1513,36 @@ def api_send():
         # Step 4: Pack and Send
         from network import pack_packet
         peer_rsa_pub = _connection_state.get('peer_public_key_raw')
-        encrypted_aes_key = rsa_encrypt_bytes(session_key, peer_rsa_pub) if peer_rsa_pub else b''
-        encrypted_hmac_key = rsa_encrypt_bytes(hmac_key, peer_rsa_pub) if peer_rsa_pub else b''
+        # 用对方RSA公钥加密AES/HMAC密钥（混合加密：RSA加密对称密钥）
+        # 如果对方RSA密钥太小（n < 128位），无法加密16字节的AES密钥，则跳过
+        encrypted_aes_key = b''
+        encrypted_hmac_key = b''
+        rsa_enc_note = ''
+        if peer_rsa_pub:
+            peer_n = peer_rsa_pub[1]
+            try:
+                if peer_n.bit_length() >= 128:
+                    encrypted_aes_key = rsa_encrypt_bytes(session_key, peer_rsa_pub)
+                    encrypted_hmac_key = rsa_encrypt_bytes(hmac_key, peer_rsa_pub)
+                    rsa_enc_note = f'已用对方RSA公钥({peer_n.bit_length()}位)加密'
+                else:
+                    rsa_enc_note = f'对方RSA公钥仅{peer_n.bit_length()}位，小于AES密钥128位，跳过RSA加密（已由DH密钥交换保障安全）'
+            except Exception as e:
+                rsa_enc_note = f'RSA加密跳过: {e}（已由DH密钥交换保障安全）'
 
         packet = pack_packet(ciphertext, encrypted_aes_key, encrypted_hmac_key, hmac_value, iv=iv_used)
+        step4_detail = {
+            '数据包大小': f'{len(packet)} 字节',
+            '目标': f'{peer_ip}:{peer_port}',
+            '加密的 AES 密钥长度': f'{len(encrypted_aes_key)} 字节',
+            '加密的 HMAC 密钥长度': f'{len(encrypted_hmac_key)} 字节',
+        }
+        if rsa_enc_note:
+            step4_detail['RSA加密对称密钥'] = rsa_enc_note
         steps.append({
             'id': 4, 'title': '打包并发送',
             'description': '将加密数据打包，通过 TCP 发送',
-            'detail': {
-                '数据包大小': f'{len(packet)} 字节',
-                '目标': f'{peer_ip}:{peer_port}',
-                '加密的 AES 密钥长度': f'{len(encrypted_aes_key)} 字节',
-                '加密的 HMAC 密钥长度': f'{len(encrypted_hmac_key)} 字节',
-            }
+            'detail': step4_detail
         })
 
         # Send via TCP

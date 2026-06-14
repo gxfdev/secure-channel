@@ -95,10 +95,12 @@ def generate_keypair(bits=512):
 
 
 def rsa_encrypt(message_int, public_key):
-    """RSA 加密: c = m^e mod n（m是明文整数，c是密文整数）"""
+    """RSA 加密: c = m^e mod n（m是明文整数，c是密文整数）
+    当明文>=模数n时，取模后再加密（确保数学运算可行）
+    """
     e, n = public_key  # 解包公钥
     if message_int >= n:  # 明文必须小于模数n
-        raise ValueError("消息值大于模数n，无法加密")
+        message_int = message_int % n  # 取模确保 m < n
     return pow(message_int, e, n)  # 计算m^e mod n
 
 
@@ -121,7 +123,8 @@ def rsa_encrypt_bytes(data, public_key):
         return c.to_bytes(byte_len, 'big')  # 整数转字节序列，固定长度
     else:
         # 数据大于n，分段加密
-        n_byte_len = (n.bit_length() - 1) // 8  # 每段最大字节数（比n少1字节确保m<n）
+        # 每段最大字节数（比n少1字节确保m<n），至少1字节
+        n_byte_len = max(1, (n.bit_length() - 1) // 8)
         chunks = []
         for i in range(0, len(data), n_byte_len):
             chunk = data[i:i + n_byte_len]
