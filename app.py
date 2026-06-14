@@ -362,12 +362,16 @@ def set_mode():
     if new_mode == MODE:
         return jsonify({'success': True, 'mode': MODE, 'message': f'已经是{"发送端" if MODE=="sender" else "接收端"}模式'})
 
-    # 1. 完全重置连接状态
+    # 1. 通知对端断开连接
+    if _connection_state['status'] == 'connected':
+        _notify_peer_disconnect()
+
+    # 2. 完全重置连接状态
     _reset_connection_state()
     _negotiate_steps = []
     _latest_received = None
 
-    # 2. 重新生成所有密钥（RSA + DH），确保干净状态
+    # 3. 重新生成所有密钥（RSA + DH），确保干净状态
     with _rsa_lock:
         _rsa_keys = generate_keypair(RSA_BITS)
         pub_path, priv_path = save_keypair(_rsa_keys[0], _rsa_keys[1],
