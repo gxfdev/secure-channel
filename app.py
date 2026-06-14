@@ -375,16 +375,7 @@ def set_mode():
     _dh_peer = None
 
     # 3. 停止旧的协商服务器
-    _negotiate_server_running = False
-    if _negotiate_server_sock:
-        try:
-            _negotiate_server_sock.close()
-        except:
-            pass
-    # 等待旧线程退出
-    if _negotiate_server_thread and _negotiate_server_thread.is_alive():
-        _negotiate_server_thread.join(timeout=2)
-    _negotiate_server_thread = None
+    _stop_negotiate_server()
 
     # 4. 切换模式
     MODE = new_mode
@@ -815,7 +806,22 @@ def restart_negotiate():
         _key_files['pub'] = os.path.abspath(pub_path)
         _key_files['priv'] = os.path.abspath(priv_path)
 
-    # 关闭旧socket让旧线程退出
+    # 安全停止旧协商服务器
+    _stop_negotiate_server()
+
+    start_negotiate_server()
+    return jsonify({'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']})
+
+
+# ==================== Receiver Negotiation Server ====================
+
+def _stop_negotiate_server():
+    """安全停止协商服务器，确保旧线程完全退出、端口释放。"""
+    global _negotiate_server_running, _negotiate_server_sock, _negotiate_server_thread, _negotiate_server_status
+
+    _negotiate_server_running = False
+
+    # 关闭 server socket，让 accept() 抛出 OSError 从而退出循环
     if _negotiate_server_sock:
         try:
             _negotiate_server_sock.close()
@@ -823,19 +829,19 @@ def restart_negotiate():
             pass
         _negotiate_server_sock = None
 
-    _negotiate_server_running = False
-    _negotiate_server_status = {'running': False, 'port': None, 'error': None}
-    # 等待旧线程退出
+    # 等待旧线程完全退出（最多5秒）
     if _negotiate_server_thread and _negotiate_server_thread.is_alive():
-        _negotiate_server_thread.join(timeout=2)
-    start_negotiate_server()
-    return jsonify({'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']})
+        _negotiate_server_thread.join(timeout=5)
+    _negotiate_server_thread = None
 
+    # 额外等待端口释放（Windows 上 SO_REUSEADDR 不一定立即生效）
+    time.sleep(0.3)
 
-# ==================== Receiver Negotiation Server ====================
+    _negotiate_server_status = {'running': False, 'port': None, 'error': None}
+
 
 def start_negotiate_server():
-    global _negotiate_server_running, _dh_peer, _connection_state, _negotiate_server_sock
+    global _negotiate_server_running, _dh_peer, _connection_state, _negotiate_server_sock, _negotiate_server_thread
 
     if _negotiate_server_running:
         return
@@ -847,6 +853,10 @@ def start_negotiate_server():
         except:
             pass
         _negotiate_server_sock = None
+
+    # 用 Event 同步等待服务器绑定端口成功
+    server_ready = threading.Event()
+    server_error = [None]  # 用列表传递异常信息
 
     def server_thread():
         global _dh_peer, _connection_state, _negotiate_server_status, _negotiate_server_running, _negotiate_steps, _negotiate_server_sock
@@ -860,10 +870,13 @@ def start_negotiate_server():
             print(f"  [Negotiate Server] Listening on 0.0.0.0:{LISTEN_PORT}")
             _negotiate_server_running = True
             _negotiate_server_status = {'running': True, 'port': LISTEN_PORT, 'error': None}
+            server_ready.set()  # 通知主线程：服务器已就绪
         except Exception as e:
             print(f"  [Negotiate Server] Failed to start: {e}")
             _negotiate_server_status = {'running': False, 'port': LISTEN_PORT, 'error': str(e)}
             _negotiate_server_running = False
+            server_error[0] = e
+            server_ready.set()  # 即使失败也要通知，避免主线程死等
             return
 
         while _negotiate_server_running:
@@ -1114,6 +1127,15 @@ def start_negotiate_server():
     thread.start()
     global _negotiate_server_thread
     _negotiate_server_thread = thread
+
+    # 等待服务器绑定端口成功或失败（最多10秒）
+    server_ready.wait(timeout=10)
+    if server_error[0]:
+        print(f"  [Negotiate Server] Startup failed: {server_error[0]}")
+    elif not _negotiate_server_running:
+        print(f"  [Negotiate Server] Startup timed out")
+    else:
+        print(f"  [Negotiate Server] Started successfully")
 
 
 def _handle_data_transfer(conn, req):
