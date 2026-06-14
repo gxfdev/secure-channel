@@ -1975,6 +1975,257 @@ docker run -d --name sender \
 
 **注意：** `--cap-add NET_ADMIN --cap-add NET_RAW` 是 Scapy 抓包所需的网络权限，`--network host` 使容器直接使用宿主机网络栈，避免 NAT 导致的连接问题。
 
+#### 双节点 Docker 部署（node7 接收端 + node8 发送端）
+
+本系统部署在两台 Linux 服务器上，node7 作为接收端，node8 作为发送端，通过内网进行加密通信。
+
+**网络拓扑：**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        内网 192.168.157.0/24                     │
+│                                                                  │
+│  ┌─────────────────────────┐      ┌─────────────────────────┐   │
+│  │     node7 (接收端)       │      │     node8 (发送端)       │   │
+│  │  IP: 192.168.157.207    │◄─────│  IP: 192.168.157.208    │   │
+│  │                         │ TCP  │                         │   │
+│  │  ┌───────────────────┐  │:9999 │  ┌───────────────────┐  │   │
+│  │  │ netsec-receiver   │◄│──────│──│ netsec-sender     │  │   │
+│  │  │ MODE=receiver     │  │      │  │ MODE=sender       │  │   │
+│  │  │ LISTEN_PORT=9999  │  │      │  │ RECEIVER_HOST=    │  │   │
+│  │  │ FLASK_PORT=5000   │  │      │  │   192.168.157.207 │  │   │
+│  │  └───────────────────┘  │      │  │ FLASK_PORT=5000   │  │   │
+│  │         ▲               │      │  └───────────────────┘  │   │
+│  │         │ :5000         │      │         ▲               │   │
+│  │    浏览器访问            │      │         │ :5000         │   │
+│  │  http://192.168.157.207│      │    浏览器访问            │   │
+│  │         :5000           │      │  http://192.168.157.208│   │
+│  └─────────────────────────┘      │         :5000           │   │
+│                                    └─────────────────────────┘   │
+│                                                                  │
+│  通信流程:                                                       │
+│  1. node8 发送端 → TCP连接 → node7:9999 (密钥协商)               │
+│  2. node8 加密数据 → TCP传输 → node7:9999 (数据传输)             │
+│  3. 浏览器 → HTTP → node7:5000 / node8:5000 (Web管理界面)       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**前置条件（两台节点均需执行）：**
+
+```bash
+# 1. 确保 Docker 已安装
+docker --version
+# 若未安装:
+curl -fsSL https://get.docker.com | sh
+systemctl enable docker && systemctl start docker
+
+# 2. 确保 Docker Compose 已安装
+docker compose version
+# 若未安装:
+apt-get update && apt-get install -y docker-compose-plugin
+
+# 3. 创建数据存储目录
+mkdir -p /root/captured_data
+
+# 4. 确认网络互通
+# 在 node7 上:
+ping -c 3 192.168.157.208
+# 在 node8 上:
+ping -c 3 192.168.157.207
+
+# 5. 确认端口未被占用
+ss -tlnp | grep -E '5000|9999'
+```
+
+---
+
+**node7 部署步骤（接收端 192.168.157.207）：**
+
+```bash
+# ===== 步骤1: 拉取镜像 =====
+# 方式A: 从 GitHub Container Registry 拉取
+echo '你的GHCR_TOKEN' | docker login ghcr.io -u gxfdev --password-stdin
+docker pull ghcr.io/gxfdev/secure-channel:latest
+
+# 方式B: 从阿里云 ACR 拉取
+docker pull crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest
+
+# 方式C: 本地构建（需要先 git clone 项目）
+git clone https://github.com/gxfdev/secure-channel.git
+cd secure-channel
+docker build -t secure-transport .
+
+# ===== 步骤2: 停止并删除旧容器（如存在） =====
+docker stop netsec-receiver 2>/dev/null || true
+docker rm netsec-receiver 2>/dev/null || true
+
+# ===== 步骤3: 启动接收端容器 =====
+docker run -d \
+  --name netsec-receiver \
+  --network host \
+  --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
+  --restart unless-stopped \
+  -v /root/captured_data:/app/captured_data \
+  -e MODE=receiver \
+  -e FLASK_HOST=0.0.0.0 \
+  -e FLASK_PORT=5000 \
+  -e LISTEN_PORT=9999 \
+  -e RSA_BITS=1024 \
+  -e DATA_DIR=/app/captured_data \
+  ghcr.io/gxfdev/secure-channel:latest
+
+# ===== 步骤4: 验证容器运行状态 =====
+docker ps | grep netsec-receiver
+# 预期输出:
+# CONTAINER ID   IMAGE                              STATUS          PORTS     NAMES
+# xxxxxxxxxxxx   ghcr.io/gxfdev/secure-channel:...  Up 10 seconds             netsec-receiver
+
+# ===== 步骤5: 检查容器日志 =====
+docker logs netsec-receiver --tail 20
+# 预期输出包含:
+#   * Running on http://0.0.0.0:5000
+#   接收端模式已启动，监听端口: 9999
+
+# ===== 步骤6: 验证端口监听 =====
+ss -tlnp | grep -E '5000|9999'
+# 预期输出:
+# LISTEN  0  128  0.0.0.0:5000  0.0.0.0:*   (Flask Web)
+# LISTEN  0  5    0.0.0.0:9999  0.0.0.0:*   (协商服务)
+
+# ===== 步骤7: 浏览器访问 Web 界面 =====
+# 在本地电脑浏览器打开:
+# http://192.168.157.207:5000
+# 应看到"安全传输系统"界面，模式显示为"接收端"
+```
+
+---
+
+**node8 部署步骤（发送端 192.168.157.208）：**
+
+```bash
+# ===== 步骤1: 拉取镜像 =====
+# 与 node7 相同，选择一种方式拉取
+echo '你的GHCR_TOKEN' | docker login ghcr.io -u gxfdev --password-stdin
+docker pull ghcr.io/gxfdev/secure-channel:latest
+
+# ===== 步骤2: 停止并删除旧容器（如存在） =====
+docker stop netsec-sender 2>/dev/null || true
+docker rm netsec-sender 2>/dev/null || true
+
+# ===== 步骤3: 启动发送端容器 =====
+docker run -d \
+  --name netsec-sender \
+  --network host \
+  --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
+  --restart unless-stopped \
+  -v /root/captured_data:/app/captured_data \
+  -e MODE=sender \
+  -e FLASK_HOST=0.0.0.0 \
+  -e FLASK_PORT=5000 \
+  -e RECEIVER_HOST=192.168.157.207 \
+  -e RECEIVER_PORT=9999 \
+  -e RSA_BITS=1024 \
+  -e DATA_DIR=/app/captured_data \
+  ghcr.io/gxfdev/secure-channel:latest
+
+# ===== 步骤4: 验证容器运行状态 =====
+docker ps | grep netsec-sender
+# 预期输出:
+# CONTAINER ID   IMAGE                              STATUS          PORTS     NAMES
+# xxxxxxxxxxxx   ghcr.io/gxfdev/secure-channel:...  Up 10 seconds             netsec-sender
+
+# ===== 步骤5: 检查容器日志 =====
+docker logs netsec-sender --tail 20
+# 预期输出包含:
+#   * Running on http://0.0.0.0:5000
+#   发送端模式已启动，目标: 192.168.157.207:9999
+
+# ===== 步骤6: 验证端口监听 =====
+ss -tlnp | grep 5000
+# 预期输出:
+# LISTEN  0  128  0.0.0.0:5000  0.0.0.0:*   (Flask Web)
+# 注意: 发送端不监听 9999，只有接收端才监听
+
+# ===== 步骤7: 浏览器访问 Web 界面 =====
+# 在本地电脑浏览器打开:
+# http://192.168.157.208:5000
+# 应看到"安全传输系统"界面，模式显示为"发送端"
+```
+
+---
+
+**连接测试与验证：**
+
+```bash
+# ===== 在 node8 发送端 Web 界面操作 =====
+# 1. 打开 http://192.168.157.208:5000
+# 2. 点击"连接"按钮，发起与 node7 的密钥协商
+# 3. 观察协商过程：
+#    - RSA 公钥交换 ✓
+#    - DH 公钥交换 + 签名验证 ✓
+#    - 会话密钥派生 ✓
+# 4. 输入测试消息 "Hello, 安全传输!"
+# 5. 点击"发送"
+
+# ===== 在 node7 接收端 Web 界面确认 =====
+# 1. 打开 http://192.168.157.207:5000
+# 2. 应看到接收到的消息 "Hello, 安全传输!"
+# 3. 查看抓包面板，确认加密数据包详情
+
+# ===== 命令行验证连接 =====
+# 在 node7 上查看 TCP 连接:
+ss -tnp | grep 9999
+# 预期输出:
+# ESTAB  0  0  192.168.157.207:9999  192.168.157.208:xxxxx
+
+# 在 node8 上查看 TCP 连接:
+ss -tnp | grep 9999
+# 预期输出:
+# ESTAB  0  0  192.168.157.208:xxxxx  192.168.157.207:9999
+```
+
+**常见问题排查：**
+
+| 问题 | 原因 | 解决方法 |
+|------|------|---------|
+| 容器启动失败 | 端口被占用 | `ss -tlnp \| grep 5000` 查看占用进程，`kill` 或改 `FLASK_PORT` |
+| 发送端连接不上接收端 | 防火墙拦截 | `firewall-cmd --add-port=9999/tcp --permanent && firewall-cmd --reload` |
+| 发送端连接不上接收端 | 接收端容器未启动 | 在 node7 上 `docker ps` 确认容器运行 |
+| 抓包无数据 | 缺少网络权限 | 确认 `--cap-add NET_ADMIN --cap-add NET_RAW` 参数 |
+| 切换模式后连接失败 | 旧连接未释放 | 重启容器: `docker restart netsec-receiver` |
+| 容器重启后数据丢失 | 未挂载数据卷 | 确认 `-v /root/captured_data:/app/captured_data` |
+
+**容器管理常用命令：**
+
+```bash
+# 查看容器状态
+docker ps -a | grep netsec
+
+# 查看实时日志
+docker logs -f netsec-receiver    # 接收端
+docker logs -f netsec-sender      # 发送端
+
+# 重启容器
+docker restart netsec-receiver
+docker restart netsec-sender
+
+# 进入容器调试
+docker exec -it netsec-receiver /bin/bash
+docker exec -it netsec-sender /bin/bash
+
+# 更新部署（拉取新镜像后重新启动）
+docker pull ghcr.io/gxfdev/secure-channel:latest
+docker stop netsec-receiver && docker rm netsec-receiver
+# 然后重新执行 docker run 命令（见上方步骤3）
+
+# 完全清理
+docker stop netsec-receiver netsec-sender
+docker rm netsec-receiver netsec-sender
+docker rmi ghcr.io/gxfdev/secure-channel:latest
+```
+
 #### Docker Compose 部署
 
 ```yaml
