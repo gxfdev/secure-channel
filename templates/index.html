@@ -218,9 +218,17 @@
                     <button class="btn btn-orange btn-sm" @click="doCapture" :disabled="loading.capture">{{loading.capture?'抓取中...':'抓取数据包'}}</button>
                 </div>
                 <!-- 抓包结果展示 -->
-                <div v-if="capturePackets.length" class="mt2">
-                    <div class="text-xs font-bold mb1" style="color:#a78bfa">抓包结果 ({{capturePackets.length}} 个数据包)</div>
-                    <div v-for="pkt in capturePackets" :key="pkt.id" class="step-card" style="border-color:#4c1d95;padding:8px 12px;margin-bottom:6px">
+                <div v-if="capturePackets.length" class="mt2 capture-result-area">
+                    <div class="flex items-center gap2 mb2 flex-wrap">
+                        <div class="text-xs font-bold" style="color:#a78bfa">抓包结果 ({{filteredCapturePackets.length}}/{{capturePackets.length}} 个数据包)</div>
+                        <div class="flex gap2">
+                            <button v-for="pf in ['all','TCP','UDP','ICMP','ARP']" :key="pf"
+                                class="btn btn-sm" :style="{background: captureProtocolFilter===pf?'#7c3aed':'#334155', color: captureProtocolFilter===pf?'#fff':'#94a3b8', padding:'2px 10px', fontSize:'11px'}"
+                                @click="captureProtocolFilter=pf">{{pf==='all'?'全部':pf}}</button>
+                        </div>
+                    </div>
+                    <div style="max-height:400px;overflow-y:auto;border:1px solid #4c1d95;border-radius:6px;padding:8px">
+                    <div v-for="pkt in filteredCapturePackets" :key="pkt.id" class="step-card" style="border-color:#4c1d95;padding:8px 12px;margin-bottom:6px">
                         <div class="flex items-center gap2 mb1">
                             <span class="step-num" style="background:#7c3aed;width:22px;height:22px;font-size:10px">{{pkt.id}}</span>
                             <span class="font-bold text-xs" style="color:#c4b5fd">{{pkt.summary || 'Unknown'}}</span>
@@ -237,6 +245,7 @@
                         <div v-if="pkt.payload" class="mt1 text-xs" style="color:#64748b;word-break:break-all;max-height:60px;overflow:auto">
                             载荷: {{pkt.payload.length > 200 ? pkt.payload.substring(0,200)+'...' : pkt.payload}}
                         </div>
+                    </div>
                     </div>
                 </div>
                 <div v-if="captureLog.length && !capturePackets.length" class="mt2">
@@ -405,6 +414,7 @@ createApp({
         const receivedData = ref([]);
         const capturePackets = ref([]);   // 抓包结果：数据包详情列表
         const captureLog = ref([]);       // 抓包过程日志
+        const captureProtocolFilter = ref('all'); // 协议筛选: all/TCP/UDP/ICMP/ARP
         const logs = ref([]);
         const algoResults = ref(null);
 
@@ -420,6 +430,10 @@ createApp({
         };
         const connStatusClass = computed(() => (connStatusMap[conn.status]||connStatusMap.disconnected).cls);
         const connStatusLabel = computed(() => (connStatusMap[conn.status]||connStatusMap.disconnected).lbl);
+        const filteredCapturePackets = computed(() => {
+            if (captureProtocolFilter.value === 'all') return capturePackets.value;
+            return capturePackets.value.filter(p => p.protocol === captureProtocolFilter.value);
+        });
 
         // === 日志 ===
         function log(msg, type) {
@@ -614,7 +628,13 @@ createApp({
                     sendData.value = r.json_data || '';
                     capturePackets.value = r.packets || [];
                     captureLog.value = r.capture_log || [];
+                    captureProtocolFilter.value = 'all';
                     log('抓取成功！共 '+r.count+' 个数据包','success');
+                    // 自动滚动到抓包结果区域
+                    nextTick(() => {
+                        const el = document.querySelector('[ref="captureResultArea"]') || document.querySelector('.capture-result-area');
+                        if (el) el.scrollIntoView({behavior:'smooth', block:'start'});
+                    });
                 } else { log('抓取失败: '+(r.error||''),'error'); }
             } catch(e) { log('请求失败: '+e.message,'error'); }
             finally { loading.capture = false; }
@@ -682,9 +702,9 @@ createApp({
 
         return {
             info, version, mode, keyInfo, conn,
-            targetHost, targetPort, sendData, captureCount, captureFilter, captureCustomFilter,
+            targetHost, targetPort, sendData, captureCount, captureFilter, captureCustomFilter, captureProtocolFilter,
             loading, testResult, regenResult,
-            connectSteps, sendSteps, negotiateSteps, receivedData, capturePackets, captureLog, logs, algoResults,
+            connectSteps, sendSteps, negotiateSteps, receivedData, capturePackets, filteredCapturePackets, captureLog, logs, algoResults,
             connStatusClass, connStatusLabel,
             log, truncate, esc, renderDetail,
             loadInfo, refreshConn, refreshRecv, setMode,
