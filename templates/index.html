@@ -217,11 +217,13 @@
                     <button class="btn btn-sm" style="background:#7c3aed;color:#fff" @click="capturePeer">抓取对方IP</button>
                     <button class="btn btn-orange btn-sm" @click="doCapture" :disabled="loading.capture">{{loading.capture?'抓取中...':'抓取数据包'}}</button>
                 </div>
+                <div v-if="captureSavedTo" class="mt1" style="background:#1e293b;border:1px solid #334155;border-radius:6px;padding:6px 12px">
+                    <span class="text-xs" style="color:#94a3b8">数据包已保存至: </span><span class="text-xs font-bold" style="color:#a78bfa">{{captureSavedTo}}</span>
+                </div>
                 <!-- 抓包结果展示 -->
                 <div v-if="capturePackets.length" class="mt2 capture-result-area">
                     <div class="flex items-center gap2 mb2 flex-wrap">
                         <div class="text-xs font-bold" style="color:#a78bfa">抓包结果 ({{filteredCapturePackets.length}}/{{capturePackets.length}} 个数据包)</div>
-                        <div v-if="captureSavedTo" class="text-xs" style="color:#64748b;background:#1e293b;padding:2px 8px;border-radius:4px">保存路径: {{captureSavedTo}}</div>
                         <div class="flex gap2">
                             <button v-for="pf in ['all','TCP','UDP','ICMP','ARP']" :key="pf"
                                 class="btn btn-sm" :style="{background: captureProtocolFilter===pf?'#7c3aed':'#334155', color: captureProtocolFilter===pf?'#fff':'#94a3b8', padding:'2px 10px', fontSize:'11px'}"
