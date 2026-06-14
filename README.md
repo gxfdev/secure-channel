@@ -555,173 +555,243 @@ RSA 数字签名用于验证消息的**真实性**和**不可否认性**。
 └──────────────┴──────────────┴──────────────┴──────────────┘
 
 组合数据内部格式:
-┌────────┬──────┬────────┬──────┬────────┬──────┬──────┬────┬──────────┐
-│4B:密文长│密文  │4B:AES密│加密的│4B:HMAC │加密的│4B:IV │IV │32B:HMAC值│
-│        │      │钥长度  │AES密钥│密钥长度 │HMAC密│长度  │    │          │
-│        │      │        │      │        │钥    │      │    │          │
-└────────┴──────┴────────┴──────┴────────┴──────┴──────┴────┴──────────┘
+┌────────────┬────────────┬────────────┬────────────┬────────────┐
+│ 密文       │ 加密的AES密钥│ 加密的HMAC密钥│ IV(16字节) │ HMAC(32字节)│
+│ (变长)     │ (变长)     │ (变长)     │ (固定)     │ (固定)     │
+└────────────┴────────────┴────────────┴────────────┴────────────┘
 ```
 
-### TCP 粘包问题解决
+**粘包问题解决方案：**
 
-TCP 是流式协议，不保证消息边界。发送方连续发送两个数据包，接收方可能一次 recv 就收到两个包的数据（粘包），或者一次 recv 只收到半个包（半包）。
+TCP 是面向字节流的协议，不保留消息边界。当发送端连续发送多条数据时，接收端可能一次性收到多条数据的合并内容（粘包），或者只收到一条数据的一部分（半包）。
 
-**解决方案：**
+本系统采用**长度前缀法**解决粘包问题：
 
 ```python
-def recv_exact(sock, n, timeout=10):
-    """精确接收 n 字节数据，解决半包问题"""
-    sock.settimeout(timeout)
+# 发送端：先发4字节长度（大端序），再发数据
+def send_data(sock, data):
+    length = len(data)
+    sock.sendall(struct.pack('>I', length) + data)
+
+# 接收端：先读4字节长度，再按长度读取完整数据
+def recv_exact(sock, n, timeout=30):
+    """精确读取 n 字节，解决半包问题"""
     data = b''
-    while len(data) < n:              # 循环直到收够 n 字节
+    while len(data) < n:
         chunk = sock.recv(n - len(data))
-        if not chunk:                 # 连接断开
+        if not chunk:
             raise ConnectionError("连接已断开")
         data += chunk
     return data
 
-# 接收流程:
-# 1. 先接收 4 字节 → 解析为数据包总长度
-total_len = struct.unpack('>I', recv_exact(sock, 4))[0]
-# 2. 再接收 total_len 字节 → 得到完整数据包
-packet_data = recv_exact(sock, total_len)
-```
-
-### 密钥协商网络流程
-
-密钥协商阶段使用 JSON 格式通信（同样采用先发长度再发数据的方式）：
-
-```python
-def send_msg(sock, data):
-    """发送 JSON 消息（4字节长度 + JSON数据）"""
-    msg = json.dumps(data).encode()
-    sock.sendall(struct.pack('>I', len(msg)))  # 先发4字节长度
-    sock.sendall(msg)                          # 再发JSON数据
-
-def recv_msg(sock):
-    """接收 JSON 消息"""
-    length = struct.unpack('>I', _recv_exact(sock, 4))[0]  # 读4字节长度
-    data = _recv_exact(sock, length)                         # 读JSON数据
-    return json.loads(data.decode())
-```
-
-**协商过程的消息序列：**
-
-```
-发送端 → 接收端: {'type': 'hello', 'mode': 'sender'}
-接收端 → 发送端: {'type': 'hello_ack', 'mode': 'receiver'}
-
-发送端 → 接收端: {'type': 'rsa_pub', 'e': 65537, 'n': ...}
-接收端 → 发送端: {'type': 'rsa_pub', 'e': 65537, 'n': ...}
-
-发送端 → 接收端: {'type': 'dh_pub', 'public_key': '0x...', 'signature': '...'}
-接收端 → 发送端: {'type': 'dh_pub', 'public_key': '0x...', 'signature': '...'}
-
-发送端 → 接收端: {'type': 'ready'}
-接收端 → 发送端: {'type': 'ready'}
-```
-
-### 网络传输代码（network.py）
-
-```python
-def pack_packet(ciphertext, encrypted_aes_key, encrypted_hmac_key, hmac_value, iv=None):
-    """将加密后的各部分数据打包为传输数据包"""
-    packet = b''
-    # 密文: 4字节长度 + 密文数据
-    packet += struct.pack('>I', len(ciphertext))
-    packet += ciphertext
-    # 加密后的AES密钥: 4字节长度 + 密钥数据
-    packet += struct.pack('>I', len(encrypted_aes_key))
-    packet += encrypted_aes_key
-    # 加密后的HMAC密钥: 4字节长度 + 密钥数据
-    packet += struct.pack('>I', len(encrypted_hmac_key))
-    packet += encrypted_hmac_key
-    # IV: 4字节长度 + IV数据（0表示无IV）
-    if iv is not None:
-        packet += struct.pack('>I', len(iv))
-        packet += iv
-    else:
-        packet += struct.pack('>I', 0)
-    # HMAC值: 固定32字节
-    packet += hmac_value
-    return packet
-
-def send_data(host, port, packet, timeout=10):
-    """通过 TCP 发送数据包（先发4字节总长度，解决粘包）"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((host, port))
-    sock.sendall(struct.pack('>I', len(packet)))  # 总长度
-    sock.sendall(packet)                          # 数据包
-    sock.close()
+def recv_message(sock):
+    """接收一条完整消息，解决粘包问题"""
+    length_bytes = recv_exact(sock, 4)           # 先读4字节长度
+    length = struct.unpack('>I', length_bytes)[0]  # 解析消息长度
+    return recv_exact(sock, length)               # 按长度读取完整消息
 ```
 
 ---
 
-## 部署说明
+## 六、系统部署
 
-### 两台局域网虚拟机部署
+### 1、Docker 容器化部署
 
-**网络拓扑：**
+本系统使用 Docker 容器化部署，确保环境一致性和可移植性。
 
-```
-┌─────────────────────┐       局域网        ┌─────────────────────┐
-│  发送端 VM (node8)   │                     │  接收端 VM (node7)   │
-│  IP: 192.168.157.208 │◄──────────────────►│  IP: 192.168.157.207 │
-│  Web: :5000         │    TCP :9999        │  Web: :5001         │
-└─────────────────────┘                     └─────────────────────┘
-```
+**Dockerfile：**
 
-**部署步骤：**
+```dockerfile
+FROM python:3.11-slim
 
-```bash
-# 两台 VM 都拉取镜像
-docker pull crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest
+# 安装系统依赖（Scapy 需要的底层库）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tcpdump libpcap-dev && rm -rf /var/lib/apt/lists/*
 
-# 接收端 VM 启动容器
-docker run -d --name netsec-receiver --network host \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
-  -e MODE=receiver -e FLASK_HOST=0.0.0.0 -e FLASK_PORT=5001 -e LISTEN_PORT=9999 \
-  crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 发送端 VM 启动容器
-docker run -d --name netsec-sender --network host \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
-  -e MODE=sender -e FLASK_HOST=0.0.0.0 -e FLASK_PORT=5000 -e LISTEN_PORT=9999 \
-  crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest
+COPY . .
+EXPOSE 5000 9999
+
+# 容器启动命令
+CMD ["python", "app.py"]
 ```
 
-**操作流程：**
+**关键参数说明：**
 
-1. 接收端打开 `http://<接收端IP>:5001` → 点击「我是接收端」
-2. 发送端打开 `http://<发送端IP>:5000` → 点击「我是发送端」
-3. 发送端输入接收端 IP 和端口 9999 → 点击「连接」
-4. 观察 5 步密钥协商过程
-5. 发送端抓包 → 加密发送
-6. 接收端刷新 → 查看解密结果
+| 参数 | 说明 |
+|------|------|
+| `--network host` | 使用主机网络，容器直接使用宿主机网络栈，无需端口映射 |
+| `--cap-add NET_ADMIN` | 授予网络管理权限（Scapy 抓包需要） |
+| `--cap-add NET_RAW` | 授予原始套接字权限（Scapy 发送/接收原始数据包需要） |
 
-### 环境变量
+### 2、Jenkins CI/CD 流水线
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MODE` | `sender` | 运行模式（可在 Web 界面切换） |
-| `FLASK_HOST` | `0.0.0.0` | Web 监听地址 |
-| `FLASK_PORT` | `5000` | Web 端口（接收端用 5001） |
-| `LISTEN_PORT` | `9999` | 协商服务器端口 |
-| `RSA_BITS` | `512` | RSA 密钥位数 |
+本系统使用 Jenkins Pipeline 实现自动化构建和部署，将接收端和发送端分别部署到不同节点。
 
-### 项目结构
+**完整 Jenkinsfile：**
 
+```groovy
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_URL = 'crpi-4ppbczhsmgz5b9tt.cn-heyuan.personal.cr.aliyuncs.com/grcsd/grcs:latest'
+        RECEIVER_IP = '192.168.157.207'
+    }
+
+    stages {
+        stage('并行部署') {
+            parallel {
+                stage('部署到 node7 (接收端)') {
+                    steps {
+                        sshPublisher(publishers: [
+                            sshPublisherDesc(configName: 'node7', transfers: [
+                                sshTransfer(execCommand: """
+                                    docker rm -f netsec-receiver || true
+                                    docker pull ${IMAGE_URL}
+                                    docker run -d --name netsec-receiver --network host \
+                                        --cap-add NET_ADMIN --cap-add NET_RAW \
+                                        -e MODE=receiver \
+                                        -e FLASK_HOST=0.0.0.0 \
+                                        -e FLASK_PORT=5001 \
+                                        -e LISTEN_PORT=9999 \
+                                        ${IMAGE_URL}
+                                """)
+                            ])
+                        ])
+                    }
+                }
+                stage('部署到 node8 (发送端)') {
+                    steps {
+                        sshPublisher(publishers: [
+                            sshPublisherDesc(configName: 'node8', transfers: [
+                                sshTransfer(execCommand: """
+                                    docker rm -f netsec-sender || true
+                                    docker pull ${IMAGE_URL}
+                                    docker run -d --name netsec-sender --network host \
+                                        --cap-add NET_ADMIN --cap-add NET_RAW \
+                                        -e MODE=sender \
+                                        -e FLASK_HOST=0.0.0.0 \
+                                        -e FLASK_PORT=5000 \
+                                        -e RECEIVER_HOST=${RECEIVER_IP} \
+                                        -e RECEIVER_PORT=9999 \
+                                        -e LISTEN_PORT=9999 \
+                                        ${IMAGE_URL}
+                                """)
+                            ])
+                        ])
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '✅ 部署成功！'
+        }
+        failure {
+            echo '❌ 部署失败'
+        }
+    }
+}
 ```
-├── sha256.py          # SHA-256 哈希算法（FIPS 180-4）
-├── aes.py             # AES-128-CBC 对称加密（FIPS-197）
-├── rsa.py             # RSA 公钥加密 + 数字签名
-├── hmac_sha256.py     # HMAC-SHA256 消息认证码（RFC 2104）
-├── dh.py              # Diffie-Hellman 密钥协商（RFC 3526）
-├── capture.py         # 网络数据包采集（Scapy）
-├── network.py         # Socket 网络传输（自定义协议）
-├── app.py             # Flask Web 应用
-├── templates/
-│   └── index.html     # Web 前端界面
-├── Dockerfile         # Docker 镜像构建
-└── docker-compose.yml # Docker Compose 编排
-```
+
+**流水线说明：**
+
+| 阶段 | 节点 | 容器名 | 模式 | Web端口 | 协商端口 |
+|------|------|--------|------|---------|---------|
+| 部署到 node7 | node7 | netsec-receiver | receiver | 5001 | 9999 |
+| 部署到 node8 | node8 | netsec-sender | sender | 5000 | - |
+
+**注意事项：**
+- 两个阶段**并行执行**，缩短部署时间
+- 使用 `sshPublisher` 确保命令在目标节点上执行（而非 Jenkins Agent）
+- 需要在 Jenkins 中预先配置 `node7` 和 `node8` 的 SSH 连接信息
+- `docker rm -f || true` 确保旧容器被清理，即使不存在也不报错
+- 发送端不需要启动协商服务器（仅接收端监听 9999 端口等待连接）
+
+### 3、角色互换操作
+
+系统支持在 Web 界面动态切换发送端/接收端角色。互换流程：
+
+1. **在原接收端**：切换为发送端 → 系统自动通知原发送端断开连接、停止协商服务器
+2. **在原发送端**：切换为接收端 → 系统自动启动协商服务器、监听 9999 端口
+3. **在新发送端**：输入新接收端的 IP 地址，点击「连接」→ 完成密钥协商
+
+**互换时的自动处理：**
+- 通知对端断开连接（`disconnect_notify`），防止对端残留 `connected` 状态
+- 重新生成 RSA + DH 密钥，确保新连接使用全新密钥
+- 仅接收端启动协商服务器，发送端不监听端口
+
+---
+
+## 七、抓包分析
+
+### 1、抓包功能
+
+系统内置基于 Scapy 的网络数据包采集功能，支持在 Web 界面实时抓包并可视化展示。
+
+**支持的过滤器：**
+
+| 过滤器 | 说明 |
+|--------|------|
+| `ip` | 捕获所有 IP 数据包 |
+| `tcp` | 仅捕获 TCP 数据包 |
+| `tcp port 9999` | 仅捕获协商端口的 TCP 数据包 |
+| `host 192.168.1.1` | 仅捕获与指定 IP 通信的数据包 |
+| 自定义 | 支持任意 BPF 过滤语法 |
+
+### 2、抓包结果展示
+
+抓包完成后，界面展示每个数据包的详细信息：
+
+- **摘要**：协议 + 源 → 目标
+- **源/目标 IP:端口**
+- **协议类型**（TCP/UDP/ICMP）
+- **数据包长度**
+- **TCP 标志位**（SYN/ACK/FIN/RST 等）
+- **TTL 值**
+- **载荷预览**（Hex 格式，最多 200 字符）
+
+---
+
+## 八、算法测试
+
+系统提供独立的算法测试接口（`/api/test_algo`），可验证各加密算法的正确性：
+
+| 测试项 | 验证内容 |
+|--------|---------|
+| AES 加密/解密 | 明文 → AES加密 → AES解密 → 还原明文 |
+| RSA 加密/解密 | 明文 → RSA加密 → RSA解密 → 还原明文 |
+| RSA 签名/验证 | 消息 → RSA签名 → RSA验证 → 通过 |
+| HMAC 计算 | 消息 + 密钥 → HMAC → 验证一致性 |
+| SHA-256 哈希 | 消息 → SHA-256 → 与标准库结果比对 |
+| DH 密钥协商 | 双方独立计算共享秘密 → 验证一致 |
+
+---
+
+## 九、安全设计
+
+### 1、密钥安全
+
+- **会话密钥**：每次连接通过 DH 协商生成，断开后销毁，前向保密
+- **HMAC 密钥**：从 DH 共享秘密独立派生，与 AES 密钥分离
+- **RSA 密钥**：断开连接或切换模式时重新生成，防止密钥复用
+- **密钥存储**：RSA 密钥对保存在容器内文件系统，容器销毁即清除
+
+### 2、传输安全
+
+- **加密-认证-签名三层保护**：AES 加密 → HMAC 认证 → RSA 签名
+- **防重放**：每次加密使用随机 IV，相同明文产生不同密文
+- **防篡改**：HMAC 验证密文完整性，任何修改都会导致验证失败
+- **防伪造**：RSA 签名验证发送方身份，私钥仅发送端持有
+
+### 3、连接管理
+
+- **双向断开通知**：任一方断开连接时主动通知对端，避免状态不一致
+- **模式切换安全**：切换角色时自动断开连接、重新生成密钥、启停协商服务器
+- **超时保护**：协商服务器设置 300 秒超时，防止资源泄漏
