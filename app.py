@@ -390,8 +390,8 @@ def set_mode():
     negotiate_msg = ''
     if MODE == 'receiver':
         start_negotiate_server()
-        # 等待服务器启动完成，检查状态
-        time.sleep(0.5)
+        # start_negotiate_server 内部已等待 server_ready，额外确认状态
+        time.sleep(1)
         if _negotiate_server_status.get('running'):
             negotiate_msg = '，协商服务器已启动'
         elif _negotiate_server_status.get('error'):
@@ -399,7 +399,11 @@ def set_mode():
         else:
             negotiate_msg = '，协商服务器启动中...'
 
-    return jsonify({'success': True, 'mode': MODE, 'negotiate_server': _negotiate_server_status, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，密钥已重新生成' + negotiate_msg})
+    result = {'success': True, 'mode': MODE, 'negotiate_server': _negotiate_server_status, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，密钥已重新生成' + negotiate_msg}
+    if MODE == 'receiver' and not _negotiate_server_status.get('running'):
+        result['success'] = False
+        result['error'] = f"协商服务器启动失败: {_negotiate_server_status.get('error', '端口可能被占用')}"
+    return jsonify(result)
 
 
 # ==================== Key Management API ====================
@@ -828,7 +832,14 @@ def restart_negotiate():
     # 仅接收端启动协商服务器
     if MODE == 'receiver':
         start_negotiate_server()
-    return jsonify({'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']})
+        # 额外等待确认启动结果
+        time.sleep(0.5)
+
+    result = {'success': True, 'negotiate_server': _negotiate_server_status, 'status': _connection_state['status']}
+    if MODE == 'receiver' and not _negotiate_server_status.get('running'):
+        result['success'] = False
+        result['error'] = f"协商服务器启动失败: {_negotiate_server_status.get('error', '未知错误')}"
+    return jsonify(result)
 
 
 # ==================== Receiver Negotiation Server ====================
@@ -856,12 +867,14 @@ def _stop_negotiate_server():
             pass
         _negotiate_server_sock = None
 
-    # 等待旧线程完全退出（最多5秒）
+    # 等待旧线程完全退出（最多8秒）
     if _negotiate_server_thread and _negotiate_server_thread.is_alive():
-        _negotiate_server_thread.join(timeout=5)
+        _negotiate_server_thread.join(timeout=8)
+        if _negotiate_server_thread.is_alive():
+            print("  [Negotiate Server] WARNING: Old thread still alive after 8s join")
     _negotiate_server_thread = None
 
-    # 额外等待端口释放（Windows/Docker 上 SO_REUSEADDR 不一定立即生效）
+    # 额外等待端口释放
     time.sleep(1)
 
     _negotiate_server_status = {'running': False, 'port': None, 'error': None}
@@ -890,20 +903,20 @@ def start_negotiate_server():
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_sock.settimeout(300)
-            # 端口绑定重试（最多3次，每次间隔1秒）
+            server_sock.settimeout(3)  # 短超时，确保能快速响应停止信号
+            # 端口绑定重试（最多5次，每次间隔2秒）
             bind_ok = False
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     server_sock.bind(('0.0.0.0', LISTEN_PORT))
                     bind_ok = True
                     break
                 except OSError as be:
-                    print(f"  [Negotiate Server] Bind attempt {attempt+1}/3 failed: {be}")
-                    if attempt < 2:
-                        time.sleep(1)
+                    print(f"  [Negotiate Server] Bind attempt {attempt+1}/5 failed: {be}")
+                    if attempt < 4:
+                        time.sleep(2)
             if not bind_ok:
-                raise OSError(f"端口 {LISTEN_PORT} 绑定失败（重试3次后仍被占用）")
+                raise OSError(f"端口 {LISTEN_PORT} 绑定失败（重试5次后仍被占用）")
             server_sock.listen(5)
             _negotiate_server_sock = server_sock
             print(f"  [Negotiate Server] Listening on 0.0.0.0:{LISTEN_PORT}")
@@ -1136,6 +1149,9 @@ def start_negotiate_server():
                 conn.close()
 
             except socket.timeout:
+                # 超时时检查是否需要停止
+                if not _negotiate_server_running:
+                    break
                 # 超时时如果状态卡在协商中，重置为未连接
                 if _connection_state['status'] not in ('connected', 'disconnected'):
                     _connection_state['status'] = 'disconnected'

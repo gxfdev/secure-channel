@@ -293,7 +293,7 @@
                     &bull; 连接建立后，接收端会自动完成密钥协商和数据解密
                 </div>
                 <div v-if="info.negotiate_server && !info.negotiate_server.running" class="mt2 text-xs" style="color:#f87171;background:#1c0a0a;padding:4px 8px;border-radius:4px">
-                    协商服务器未运行！请点击「重启协商服务器」
+                    协商服务器未运行！{{info.negotiate_server.error ? '错误: '+info.negotiate_server.error : '请点击「重启协商服务器」'}}
                 </div>
             </div>
 
@@ -536,7 +536,6 @@ createApp({
                 const r = await api('/api/set_mode', {mode:m});
                 if (r.success) {
                     mode.value = m;
-                    // 立即清空UI
                     connectSteps.value = [];
                     sendSteps.value = [];
                     negotiateSteps.value = [];
@@ -545,10 +544,11 @@ createApp({
                     captureLog.value = [];
                     captureSavedTo.value = '';
                     log(r.message, 'success');
-                    await loadInfo();
                 } else {
-                    log('模式切换失败: '+(r.error||''), 'error');
+                    mode.value = m;
+                    log('模式切换警告: '+(r.error||r.message||''), 'warn');
                 }
+                await loadInfo();
             } catch(e) { log('模式切换失败: '+e.message, 'error'); }
         }
 
@@ -610,8 +610,10 @@ createApp({
                     log('协商服务器已重启，密钥已重新生成','success');
                     negotiateSteps.value = [];
                     receivedData.value = [];
-                    await loadInfo();
-                } else { log('重启失败: '+(r.error||''),'error'); }
+                } else {
+                    log('重启失败: '+(r.error||'未知错误'),'error');
+                }
+                await loadInfo();
                 await refreshConn();
             } catch(e) { log('重启失败: '+e.message,'error'); }
         }
