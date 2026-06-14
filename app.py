@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.9.0'
+APP_VERSION = '3.0.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -39,7 +39,7 @@ MODE = os.environ.get('MODE', 'sender') or 'sender'
 RECEIVER_HOST = os.environ.get('RECEIVER_HOST', '127.0.0.1') or '127.0.0.1'
 RECEIVER_PORT = int(os.environ.get('RECEIVER_PORT', '9999') or '9999')
 LISTEN_PORT = int(os.environ.get('LISTEN_PORT', '9999') or '9999')
-RSA_BITS = int(os.environ.get('RSA_BITS', '512') or '512')
+RSA_BITS = int(os.environ.get('RSA_BITS', '1024') or '1024')
 DATA_DIR = os.environ.get('DATA_DIR', './captured_data') or './captured_data'
 FLASK_HOST = os.environ.get('FLASK_HOST', '0.0.0.0') or '0.0.0.0'
 FLASK_PORT = int(os.environ.get('FLASK_PORT', '5000') or '5000')
@@ -340,7 +340,7 @@ def test_tcp():
 
 @app.route('/api/set_mode', methods=['POST'])
 def set_mode():
-    global MODE, _negotiate_server_running, _connection_state, _negotiate_server_thread
+    global MODE, _negotiate_server_running, _connection_state, _negotiate_server_thread, _negotiate_steps, _dh_peer, _rsa_keys, _received_data
     data = request.get_json() or {}
     new_mode = data.get('mode', '')
     if new_mode not in ('sender', 'receiver'):
@@ -348,223 +348,52 @@ def set_mode():
     if new_mode == MODE:
         return jsonify({'success': True, 'mode': MODE, 'message': f'已经是{"发送端" if MODE=="sender" else "接收端"}模式'})
 
-    # 重置连接状态
-    _connection_state = {'status': 'disconnected', 'peer_ip': '', 'role': new_mode}
+    # 1. 完全重置连接状态
+    _reset_connection_state()
+    _negotiate_steps = []
+    _received_data = []
 
+    # 2. 重新生成所有密钥（RSA + DH），确保干净状态
+    with _rsa_lock:
+        _rsa_keys = generate_keypair(RSA_BITS)
+        pub_path, priv_path = save_keypair(_rsa_keys[0], _rsa_keys[1],
+                                            prefix=os.path.join(DATA_DIR, 'rsa_key'))
+        _key_files['pub'] = os.path.abspath(pub_path)
+        _key_files['priv'] = os.path.abspath(priv_path)
+    _dh_peer = None
+
+    # 3. 停止旧的协商服务器
+    _negotiate_server_running = False
+    if _negotiate_server_sock:
+        try:
+            _negotiate_server_sock.close()
+        except:
+            pass
+    time.sleep(0.5)
+    _negotiate_server_thread = None
+
+    # 4. 切换模式
     MODE = new_mode
 
-    # 重启协商服务器
-    _negotiate_server_running = False
-    time.sleep(0.3)
-    _negotiate_server_thread = None
+    # 5. 重启协商服务器
     start_negotiate_server()
 
-    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，协商服务器已重启'})
+    return jsonify({'success': True, 'mode': MODE, 'message': f'已切换为{"发送端" if MODE=="sender" else "接收端"}模式，密钥已重新生成，协商服务器已重启'})
 
 
-# ==================== Custom Keys API ====================
-
-def _next_prime(n):
-    """找到 >= n 的最小素数（用于自动纠正用户输入的非素数）"""
-    from rsa import _miller_rabin
-    if n <= 2:
-        return 2
-    if n % 2 == 0:
-        n += 1
-    while not _miller_rabin(n, k=20):
-        n += 2
-    return n
-
-@app.route('/api/set_rsa_keys', methods=['POST'])
-def set_rsa_keys():
-    """根据用户指定的素数 p, q 和公钥指数 e 生成 RSA 密钥对。
-    RSA 密钥生成流程: p,q → n=p*q → φ(n)=(p-1)(q-1) → d=e^(-1) mod φ(n)
-    如果用户输入的 p/q 不是素数，自动纠正为最近的素数。
-    """
-    global _rsa_keys, _key_files
-    try:
-        data = request.get_json() or {}
-        p_val = data.get('p')
-        q_val = data.get('q')
-        e_val = data.get('e')  # 可选，默认65537
-
-        if p_val is None or q_val is None:
-            return jsonify({'success': False, 'error': '必须提供素数 p 和 q'})
-
-        p_str = str(p_val)
-        q_str = str(q_val)
-        p_int = int(p_str, 16) if p_str.startswith('0x') or p_str.startswith('0X') else int(p_str)
-        q_int = int(q_str, 16) if q_str.startswith('0x') or q_str.startswith('0X') else int(q_str)
-
-        if p_int <= 1 or q_int <= 1:
-            return jsonify({'success': False, 'error': 'p 和 q 必须是大于1的正整数'})
-
-        from rsa import _miller_rabin, _gcd, mod_inverse
-
-        corrections = []  # 记录纠正信息
-
-        # 素数验证与自动纠正
-        if not _miller_rabin(p_int, k=20):
-            old_p = p_int
-            p_int = _next_prime(p_int)
-            corrections.append(f'输入的 p={old_p} 不是素数，已自动纠正为最近的素数 p={p_int}')
-
-        if not _miller_rabin(q_int, k=20):
-            old_q = q_int
-            q_int = _next_prime(q_int)
-            corrections.append(f'输入的 q={old_q} 不是素数，已自动纠正为最近的素数 q={q_int}')
-
-        if p_int == q_int:
-            # 如果纠正后 p==q，给 q 找下一个素数
-            old_q = q_int
-            q_int = _next_prime(q_int + 1)
-            corrections.append(f'纠正后 p=q={p_int}，已将 q 调整为下一个素数 q={q_int}')
-
-        # 计算 n = p * q
-        n_int = p_int * q_int
-        # 计算欧拉函数 φ(n) = (p-1)(q-1)
-        phi_n = (p_int - 1) * (q_int - 1)
-
-        # 设置公钥指数 e
-        if e_val is not None:
-            e_str = str(e_val)
-            e_int = int(e_str, 16) if e_str.startswith('0x') or e_str.startswith('0X') else int(e_str)
-        else:
-            e_int = 65537
-
-        # e 不合法时自动纠正
-        if e_int <= 1 or e_int >= phi_n:
-            old_e = e_int
-            e_int = 65537
-            if e_int >= phi_n:
-                e_int = 3
-                while _gcd(e_int, phi_n) != 1:
-                    e_int += 2
-            corrections.append(f'输入的 e={old_e} 不合法，已自动纠正为 e={e_int}')
-
-        if _gcd(e_int, phi_n) != 1:
-            old_e = e_int
-            e_int = 3
-            while _gcd(e_int, phi_n) != 1:
-                e_int += 2
-            corrections.append(f'e={old_e} 与 φ(n) 不互素，已自动纠正为 e={e_int}')
-
-        # 计算私钥 d = e^(-1) mod φ(n)（私钥由公钥计算得出，不能随意指定）
-        d_int = mod_inverse(e_int, phi_n)
-
-        # 检查密钥长度是否足够用于签名（SHA-256输出256位，n需要>=256位才能安全签名）
-        if n_int.bit_length() < 256:
-            corrections.append(f'⚠ 警告：RSA模数n仅{n_int.bit_length()}位，小于SHA-256的256位输出。签名时将对哈希值取模n，安全性降低，建议使用更大的素数')
-
-        with _rsa_lock:
-            _rsa_keys = ((e_int, n_int), (d_int, n_int))
-            pub_path, priv_path = save_keypair(_rsa_keys[0], _rsa_keys[1],
-                                                prefix=os.path.join(DATA_DIR, 'rsa_key'))
-            _key_files['pub'] = os.path.abspath(pub_path)
-            _key_files['priv'] = os.path.abspath(priv_path)
-
-        result = {
-            'success': True,
-            'message': 'RSA 密钥已根据 p, q 生成',
-            'corrections': corrections,
-            'calculation': {
-                'p': hex(p_int),
-                'q': hex(q_int),
-                'n = p × q': hex(n_int),
-                'φ(n) = (p-1)(q-1)': hex(phi_n),
-                'e': e_int,
-                'd = e⁻¹ mod φ(n)': hex(d_int),
-            },
-            'public_key': {'e': e_int, 'n': hex(n_int), 'n_bits': n_int.bit_length()},
-            'private_key': {'d': hex(d_int), 'd_bits': d_int.bit_length()},
-        }
-        return jsonify(result)
-    except ValueError as ve:
-        return jsonify({'success': False, 'error': f'计算错误: {ve}'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-
-@app.route('/api/set_dh_keys', methods=['POST'])
-def set_dh_keys():
-    """自定义DH密钥。用户指定私钥，后端自动计算公钥: A = g^a mod p。
-    DH原理: 私钥a随机选取 → 公钥A = g^a mod p → 共享秘密 s = B^a mod p
-    """
-    global _dh_peer
-    try:
-        data = request.get_json() or {}
-        private_key_val = data.get('private_key')
-        prime_val = data.get('prime')
-        generator_val = data.get('generator')
-
-        if private_key_val is None:
-            return jsonify({'success': False, 'error': '必须提供私钥值'})
-
-        pk_str = str(private_key_val)
-        pk_int = int(pk_str, 16) if pk_str.startswith('0x') or pk_str.startswith('0X') else int(pk_str)
-
-        corrections = []
-
-        # 解析素数 p
-        if prime_val is not None:
-            p_str = str(prime_val)
-            p_int = int(p_str, 16) if p_str.startswith('0x') or p_str.startswith('0X') else int(p_str)
-            if p_int <= 2:
-                return jsonify({'success': False, 'error': '素数 p 必须大于2'})
-        else:
-            p_int = None
-
-        # 解析生成元 g
-        if generator_val is not None:
-            g_str = str(generator_val)
-            g_int = int(g_str, 16) if g_str.startswith('0x') or g_str.startswith('0X') else int(g_str)
-        else:
-            g_int = None
-
-        if pk_int <= 0:
-            return jsonify({'success': False, 'error': 'DH 私钥必须是正整数'})
-
-        # 创建DH实例
-        _dh_peer = DHPeer(bits=256, prime=p_int, generator=g_int)
-
-        # 验证私钥范围: 1 < 私钥 < p-1
-        if pk_int >= _dh_peer.p - 1:
-            old_pk = pk_int
-            pk_int = _dh_peer.p - 2
-            corrections.append(f'私钥={old_pk} 过大（必须小于 p-1），已自动纠正为 {pk_int}')
-
-        if pk_int <= 1:
-            return jsonify({'success': False, 'error': 'DH 私钥必须大于1'})
-
-        # 设置私钥，自动计算公钥: A = g^a mod p（公钥由私钥计算得出）
-        _dh_peer.private_key = pk_int
-        _dh_peer.public_key = pow(_dh_peer.g, _dh_peer.private_key, _dh_peer.p)
-        _save_dh_keys()
-
-        result = {
-            'success': True,
-            'message': 'DH 密钥已更新',
-            'corrections': corrections,
-            'calculation': {
-                '私钥 a': hex(_dh_peer.private_key),
-                '生成元 g': _dh_peer.g,
-                '素数 p 位数': _dh_peer.p.bit_length(),
-                '公钥 A = g^a mod p': hex(_dh_peer.public_key),
-            },
-            'private_key': hex(_dh_peer.private_key),
-            'public_key': hex(_dh_peer.public_key),
-            'prime_bits': _dh_peer.p.bit_length(),
-        }
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
+# ==================== Key Management API ====================
 
 @app.route('/api/regenerate_keys', methods=['POST'])
 def regenerate_keys():
-    """Regenerate all keys (RSA + DH) randomly."""
-    global _rsa_keys, _dh_peer, _key_files
+    """重新随机生成所有密钥（RSA + DH），并重置连接状态。"""
+    global _rsa_keys, _dh_peer, _key_files, _connection_state, _negotiate_steps, _received_data
     try:
+        # 重置连接状态
+        _reset_connection_state()
+        _negotiate_steps = []
+        _received_data = []
+
+        # 重新生成RSA密钥
         with _rsa_lock:
             _rsa_keys = generate_keypair(RSA_BITS)
             pub_path, priv_path = save_keypair(_rsa_keys[0], _rsa_keys[1],
@@ -572,13 +401,12 @@ def regenerate_keys():
             _key_files['pub'] = os.path.abspath(pub_path)
             _key_files['priv'] = os.path.abspath(priv_path)
 
-        if _dh_peer:
-            _dh_peer = DHPeer(bits=256)
-            _save_dh_keys()
+        # 重置DH（下次连接时自动生成）
+        _dh_peer = None
 
         return jsonify({
             'success': True,
-            'message': '所有密钥已随机重新生成',
+            'message': f'所有密钥已随机重新生成（RSA {RSA_BITS}位）',
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -938,22 +766,40 @@ def connection_status():
 
 @app.route('/api/reset_connection', methods=['POST'])
 def reset_connection():
-    """Disconnect and notify peer (bidirectional disconnect sync)."""
+    """断开连接，通知对方，重置所有状态。"""
+    global _negotiate_steps, _received_data, _dh_peer, _rsa_keys
     if _connection_state['status'] == 'connected':
         _notify_peer_disconnect()
     _reset_connection_state()
-    global _negotiate_steps
     _negotiate_steps = []
-    return jsonify({'success': True, 'message': '连接已断开', 'status': _connection_state['status']})
+    _received_data = []
+    # 重新生成密钥，确保下次连接使用新密钥
+    _dh_peer = None
+    with _rsa_lock:
+        _rsa_keys = generate_keypair(RSA_BITS)
+        pub_path, priv_path = save_keypair(_rsa_keys[0], _rsa_keys[1],
+                                            prefix=os.path.join(DATA_DIR, 'rsa_key'))
+        _key_files['pub'] = os.path.abspath(pub_path)
+        _key_files['priv'] = os.path.abspath(priv_path)
+    return jsonify({'success': True, 'message': '连接已断开，密钥已重新生成', 'status': _connection_state['status']})
 
 
 @app.route('/api/restart_negotiate', methods=['POST'])
 def restart_negotiate():
-    global _negotiate_server_running, _negotiate_server_status, _negotiate_server_sock, _negotiate_steps, _connection_state
+    global _negotiate_server_running, _negotiate_server_status, _negotiate_server_sock, _negotiate_steps, _connection_state, _dh_peer, _rsa_keys, _received_data
     # 重置连接状态和协商步骤
     _reset_connection_state()
     _negotiate_steps = []
-    _connection_state['status'] = 'disconnected'
+    _received_data = []
+    _dh_peer = None
+
+    # 重新生成RSA密钥
+    with _rsa_lock:
+        _rsa_keys = generate_keypair(RSA_BITS)
+        pub_path, priv_path = save_keypair(_rsa_keys[0], _rsa_keys[1],
+                                            prefix=os.path.join(DATA_DIR, 'rsa_key'))
+        _key_files['pub'] = os.path.abspath(pub_path)
+        _key_files['priv'] = os.path.abspath(priv_path)
 
     # 关闭旧socket让旧线程退出
     if _negotiate_server_sock:
@@ -1619,7 +1465,7 @@ def test_algo():
 
     try:
         from rsa import generate_keypair, rsa_encrypt_bytes, rsa_decrypt_bytes, rsa_sign, rsa_verify
-        pub, priv = generate_keypair(512)
+        pub, priv = generate_keypair(1024)
         test_data = b"RSA_test_data"
         enc = rsa_encrypt_bytes(test_data, pub)
         dec = rsa_decrypt_bytes(enc, priv)

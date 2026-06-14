@@ -125,56 +125,13 @@
             </div>
         </div>
 
-        <!-- 自定义密钥 -->
+        <!-- 密钥管理 -->
         <div class="card mb4" style="border-color:#f59e0b">
-            <div class="card-title" style="color:#fbbf24">&#128274; 自定义密钥</div>
-            <div class="text-xs text-slate400 mb2">当前RSA和DH密钥为随机生成。可在此指定自定义密钥，后端将实时更新。</div>
-
-            <div class="mb4">
-                <div class="text-sm font-bold mb2" style="color:#fbbf24">RSA 密钥</div>
-                <div class="text-xs text-slate400 mb2" style="background:#1e293b;padding:6px 8px;border-radius:4px">RSA原理：选两个素数 p, q → n = p×q → φ(n) = (p-1)(q-1) → d = e⁻¹ mod φ(n)</div>
-                <div class="flex gap2 mb2">
-                    <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">p (素数，十进制)</div>
-                        <input id="customRsaP" class="input" placeholder="大素数" style="font-size:12px">
-                    </div>
-                    <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">q (素数，十进制)</div>
-                        <input id="customRsaQ" class="input" placeholder="大素数" style="font-size:12px">
-                    </div>
-                    <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">e (公钥指数，可选)</div>
-                        <input id="customRsaE" class="input" placeholder="默认 65537" style="font-size:12px">
-                    </div>
-                </div>
-                <button class="btn btn-sm" style="background:#f59e0b;color:#000" onclick="setRsaKeys()">根据 p, q 生成 RSA 密钥</button>
-                <div id="rsaCorrectionBox" style="display:none;margin-top:8px;padding:8px;background:#7f1d1d;border:1px solid #f87171;border-radius:6px;font-size:12px;color:#fca5a5"></div>
-            </div>
-
-            <div class="mb4">
-                <div class="text-sm font-bold mb2" style="color:#fbbf24">DH 密钥</div>
-                <div class="text-xs text-slate400 mb2" style="background:#1e293b;padding:6px 8px;border-radius:4px">DH原理：选私钥a → 公钥A = g^a mod p → 共享秘密 s = B^a mod p</div>
-                <div class="flex gap2 mb2">
-                    <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">私钥 a (正整数)</div>
-                        <input id="customDhPriv" class="input" placeholder="正整数" style="font-size:12px">
-                    </div>
-                    <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">素数 p (可选，留空用RFC 3526)</div>
-                        <input id="customDhPrime" class="input" placeholder="留空使用默认RFC 3526" style="font-size:12px">
-                    </div>
-                    <div class="flex1">
-                        <div class="text-xs text-slate500 mb1">生成元 g (可选，留空用2)</div>
-                        <input id="customDhGen" class="input" placeholder="留空使用默认值2" style="font-size:12px">
-                    </div>
-                </div>
-                <button class="btn btn-sm" style="background:#f59e0b;color:#000" onclick="setDhKeys()">根据私钥生成 DH 密钥</button>
-                <div id="dhCorrectionBox" style="display:none;margin-top:8px;padding:8px;background:#7f1d1d;border:1px solid #f87171;border-radius:6px;font-size:12px;color:#fca5a5"></div>
-            </div>
-
-            <div>
+            <div class="card-title" style="color:#fbbf24">&#128274; 密钥管理</div>
+            <div class="text-xs text-slate400 mb2">RSA 密钥为随机自动生成（1024位），DH 密钥在连接时自动生成。点击下方按钮可重新生成所有密钥。</div>
+            <div class="flex gap2 items-center">
                 <button class="btn btn-sm" style="background:#7c3aed;color:white" onclick="regenerateKeys()">随机重新生成所有密钥</button>
-                <span id="customKeyResult" class="text-xs ml2"></span>
+                <span id="customKeyResult" class="text-xs"></span>
             </div>
         </div>
 
@@ -915,99 +872,6 @@ async function resetConnection() {
     } catch(e) { log('断开失败: '+e.message,'error'); }
 }
 
-async function setRsaKeys() {
-    var p = document.getElementById('customRsaP').value.trim();
-    var q = document.getElementById('customRsaQ').value.trim();
-    var e = document.getElementById('customRsaE').value.trim();
-    if (!p || !q) { log('请填写素数 p 和 q','warn'); return; }
-    var body = {p: p, q: q};
-    if (e) body.e = e;
-    var el = document.getElementById('customKeyResult');
-    el.textContent = '计算中...'; el.style.color = '#fbbf24';
-    try {
-        var resp = await fetch('/api/set_rsa_keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        var r = await resp.json();
-        if (r.success) {
-            el.textContent = 'RSA密钥已生成'; el.style.color = '#4ade80';
-            // 显示纠正信息（醒目红色警告框）
-            var corrBox = document.getElementById('rsaCorrectionBox');
-            if (r.corrections && r.corrections.length > 0) {
-                var corrHtml = '<div style="font-weight:bold;margin-bottom:4px;color:#f87171">⚠ 输入值不符合要求，已自动纠正：</div>';
-                for (var i = 0; i < r.corrections.length; i++) {
-                    corrHtml += '<div style="margin-left:8px">→ ' + esc(r.corrections[i]) + '</div>';
-                }
-                corrBox.innerHTML = corrHtml;
-                corrBox.style.display = 'block';
-                log('⚠ 输入值已自动纠正:', 'warn');
-                for (var i = 0; i < r.corrections.length; i++) {
-                    log('  → ' + r.corrections[i], 'warn');
-                }
-            } else {
-                corrBox.style.display = 'none';
-            }
-            log('RSA密钥已根据 p,q 生成:', 'success');
-            if (r.calculation) {
-                log('  p = '+r.calculation['p'], 'info');
-                log('  q = '+r.calculation['q'], 'info');
-                log('  n = p×q = '+r.calculation['n = p × q'], 'info');
-                log('  φ(n) = (p-1)(q-1) = '+r.calculation['φ(n) = (p-1)(q-1)'], 'info');
-                log('  e = '+r.calculation['e'], 'info');
-                log('  d = e⁻¹ mod φ(n) = '+r.calculation['d = e⁻¹ mod φ(n)'], 'info');
-            }
-            loadInfo();
-        } else {
-            el.textContent = r.error||'失败'; el.style.color = '#f87171';
-            log('RSA密钥设置失败: '+(r.error||''),'error');
-        }
-    } catch(e) { el.textContent = '失败'; el.style.color = '#f87171'; log('RSA设置失败: '+e.message,'error'); }
-}
-
-async function setDhKeys() {
-    var priv = document.getElementById('customDhPriv').value.trim();
-    var prime = document.getElementById('customDhPrime').value.trim();
-    var gen = document.getElementById('customDhGen').value.trim();
-    if (!priv) { log('请填写DH私钥','warn'); return; }
-    var el = document.getElementById('customKeyResult');
-    el.textContent = '设置中...'; el.style.color = '#fbbf24';
-    try {
-        var body = {private_key: priv};
-        if (prime) body.prime = prime;
-        if (gen) body.generator = gen;
-        var resp = await fetch('/api/set_dh_keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        var r = await resp.json();
-        if (r.success) {
-            el.textContent = 'DH密钥已更新'; el.style.color = '#4ade80';
-            // 显示纠正信息
-            var corrBox = document.getElementById('dhCorrectionBox');
-            if (r.corrections && r.corrections.length > 0) {
-                var corrHtml = '<div style="font-weight:bold;margin-bottom:4px;color:#f87171">⚠ 输入值不符合要求，已自动纠正：</div>';
-                for (var i = 0; i < r.corrections.length; i++) {
-                    corrHtml += '<div style="margin-left:8px">→ ' + esc(r.corrections[i]) + '</div>';
-                }
-                corrBox.innerHTML = corrHtml;
-                corrBox.style.display = 'block';
-                log('⚠ DH输入值已自动纠正:', 'warn');
-                for (var i = 0; i < r.corrections.length; i++) {
-                    log('  → ' + r.corrections[i], 'warn');
-                }
-            } else {
-                corrBox.style.display = 'none';
-            }
-            log('DH密钥已根据私钥生成:', 'success');
-            if (r.calculation) {
-                log('  私钥 a = '+r.calculation['私钥 a'], 'info');
-                log('  生成元 g = '+r.calculation['生成元 g'], 'info');
-                log('  素数 p 位数 = '+r.calculation['素数 p 位数'], 'info');
-                log('  公钥 A = g^a mod p = '+r.calculation['公钥 A = g^a mod p'], 'info');
-            }
-            loadInfo();
-        } else {
-            el.textContent = r.error||'失败'; el.style.color = '#f87171';
-            log('DH密钥设置失败: '+(r.error||''),'error');
-        }
-    } catch(e) { el.textContent = '失败'; el.style.color = '#f87171'; log('DH设置失败: '+e.message,'error'); }
-}
-
 async function regenerateKeys() {
     var el = document.getElementById('customKeyResult');
     el.textContent = '重新生成中...'; el.style.color = '#fbbf24';
@@ -1015,9 +879,8 @@ async function regenerateKeys() {
         var resp = await fetch('/api/regenerate_keys',{method:'POST',headers:{'Cache-Control':'no-cache'}});
         var r = await resp.json();
         if (r.success) {
-            el.textContent = '所有密钥已随机重新生成'; el.style.color = '#4ade80';
-            log('所有密钥已随机重新生成','success');
-            // 强制刷新：加时间戳防缓存
+            el.textContent = r.message; el.style.color = '#4ade80';
+            log(r.message,'success');
             await loadInfo();
         } else {
             el.textContent = r.error||'失败'; el.style.color = '#f87171';
