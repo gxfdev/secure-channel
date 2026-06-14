@@ -11,7 +11,7 @@ import struct
 import threading
 import random
 
-APP_VERSION = '2.7.1'
+APP_VERSION = '2.8.0'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -452,6 +452,10 @@ def set_rsa_keys():
         # 计算私钥 d = e^(-1) mod φ(n)（私钥由公钥计算得出，不能随意指定）
         d_int = mod_inverse(e_int, phi_n)
 
+        # 检查密钥长度是否足够用于签名（SHA-256输出256位，n需要>=256位才能安全签名）
+        if n_int.bit_length() < 256:
+            corrections.append(f'⚠ 警告：RSA模数n仅{n_int.bit_length()}位，小于SHA-256的256位输出。签名时将对哈希值取模n，安全性降低，建议使用更大的素数')
+
         with _rsa_lock:
             _rsa_keys = ((e_int, n_int), (d_int, n_int))
             pub_path, priv_path = save_keypair(_rsa_keys[0], _rsa_keys[1],
@@ -783,7 +787,8 @@ def api_connect():
         from sha256 import sha256 as _sha256_dbg
         actual_hash_dbg = int.from_bytes(_sha256_dbg(peer_dh_public_bytes), 'big')
         recovered_hash_dbg = pow(int.from_bytes(peer_dh_signature, 'big'), peer_rsa_e, peer_rsa_n)
-        sig_match = (actual_hash_dbg == recovered_hash_dbg)
+        # 当n小于哈希值时，对哈希值取模n后再比较（与rsa_verify逻辑一致）
+        sig_match = (actual_hash_dbg % peer_rsa_n == recovered_hash_dbg) if actual_hash_dbg >= peer_rsa_n else (actual_hash_dbg == recovered_hash_dbg)
 
         peer_verified = rsa_verify(peer_dh_public_bytes, peer_dh_signature, peer_rsa_pub)
         _connection_state['peer_verified'] = peer_verified

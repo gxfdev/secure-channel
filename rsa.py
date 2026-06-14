@@ -109,19 +109,53 @@ def rsa_decrypt(ciphertext_int, private_key):
 
 
 def rsa_encrypt_bytes(data, public_key):
-    """RSA 加密字节序列（将字节转整数→加密→转回字节）"""
+    """RSA 加密字节序列（将字节转整数→加密→转回字节）
+    当数据大于模数n时，分段加密（每段不超过n的位数）
+    """
     e, n = public_key  # 解包公钥
     m = int.from_bytes(data, 'big')  # 字节序列转大端序整数
-    if m >= n:  # 数据不能超过模数n
-        raise ValueError(f"数据过长({m.bit_length()}位)，无法用RSA({n.bit_length()}位)加密")
-    c = rsa_encrypt(m, public_key)  # RSA加密
-    byte_len = (n.bit_length() + 7) // 8  # 计算n的字节长度
-    return c.to_bytes(byte_len, 'big')  # 整数转字节序列，固定长度
+    if m < n:
+        # 数据小于n，直接加密
+        c = rsa_encrypt(m, public_key)  # RSA加密
+        byte_len = (n.bit_length() + 7) // 8  # 计算n的字节长度
+        return c.to_bytes(byte_len, 'big')  # 整数转字节序列，固定长度
+    else:
+        # 数据大于n，分段加密
+        n_byte_len = (n.bit_length() - 1) // 8  # 每段最大字节数（比n少1字节确保m<n）
+        chunks = []
+        for i in range(0, len(data), n_byte_len):
+            chunk = data[i:i + n_byte_len]
+            chunk_int = int.from_bytes(chunk, 'big')
+            c = rsa_encrypt(chunk_int, public_key)
+            byte_len = (n.bit_length() + 7) // 8
+            chunks.append(c.to_bytes(byte_len, 'big'))
+        # 用4字节记录段数，方便解密
+        return len(chunks).to_bytes(4, 'big') + b''.join(chunks)
 
 
 def rsa_decrypt_bytes(data, private_key):
-    """RSA 解密字节序列（将字节转整数→解密→转回字节）"""
+    """RSA 解密字节序列（将字节转整数→解密→转回字节）
+    支持分段加密数据的解密
+    """
     d, n = private_key  # 解包私钥
+    n_byte_len = (n.bit_length() + 7) // 8  # 每段密文的字节长度
+
+    # 检查是否为分段加密数据（前4字节为段数）
+    if len(data) > 4 + n_byte_len:
+        chunk_count = int.from_bytes(data[:4], 'big')
+        # 验证：如果段数*每段长度+4等于总长度，则为分段数据
+        if chunk_count * n_byte_len + 4 == len(data):
+            chunks = []
+            for i in range(chunk_count):
+                start = 4 + i * n_byte_len
+                chunk_data = data[start:start + n_byte_len]
+                c = int.from_bytes(chunk_data, 'big')
+                m = rsa_decrypt(c, private_key)
+                byte_len = max(1, (m.bit_length() + 7) // 8)
+                chunks.append(m.to_bytes(byte_len, 'big'))
+            return b''.join(chunks)
+
+    # 单段解密
     c = int.from_bytes(data, 'big')  # 字节序列转大端序整数
     m = rsa_decrypt(c, private_key)  # RSA解密
     byte_len = max(1, (m.bit_length() + 7) // 8)  # 计算明文字节长度
@@ -133,13 +167,16 @@ def rsa_sign(message_bytes, private_key):
     RSA 数字签名: s = SHA256(m)^d mod n
     先对消息计算SHA-256哈希，再用私钥对哈希值签名
     签名保证：1.身份认证（只有私钥持有者能签名）2.完整性（哈希值唯一）3.不可否认性
+    注意：当RSA模数n小于SHA-256哈希值(256位)时，对哈希值取模n后再签名
     """
     from sha256 import sha256  # 使用自实现的SHA-256
     d, n = private_key  # 解包私钥
     msg_hash = sha256(message_bytes)  # 计算消息的SHA-256哈希（32字节）
     h = int.from_bytes(msg_hash, 'big')  # 哈希值转整数
-    if h >= n:  # 哈希值必须小于模数n
-        raise ValueError("哈希值大于模数n")
+    if h >= n:
+        # 当n小于哈希值时，对哈希值取模n（确保签名数学运算可行）
+        # 这降低了安全性，但保证功能可用
+        h = h % n
     signature = pow(h, d, n)  # 签名: h^d mod n（用私钥加密哈希值）
     byte_len = (n.bit_length() + 7) // 8  # 计算签名字节长度
     return signature.to_bytes(byte_len, 'big')  # 签名转字节序列
@@ -150,13 +187,17 @@ def rsa_verify(message_bytes, signature_bytes, public_key):
     RSA 签名验证:
     1. 从签名恢复哈希值: h' = s^e mod n（用公钥解密签名）
     2. 计算消息的实际哈希: h = SHA-256(message)
-    3. 比较 h' == h，相等则签名有效
+    3. 比较 h' == h mod n，相等则签名有效
+    注意：当RSA模数n小于SHA-256哈希值(256位)时，对哈希值取模n后再比较
     """
     from sha256 import sha256  # 使用自实现的SHA-256
     e, n = public_key  # 解包公钥
     s = int.from_bytes(signature_bytes, 'big')  # 签名转整数
     recovered_hash = pow(s, e, n)  # 用公钥解密签名，恢复哈希值: s^e mod n
     actual_hash = int.from_bytes(sha256(message_bytes), 'big')  # 计算消息的实际哈希
+    # 当n小于哈希值时，对实际哈希值取模n后再比较（与签名时一致）
+    if actual_hash >= n:
+        actual_hash = actual_hash % n
     return recovered_hash == actual_hash  # 比较恢复的哈希和实际哈希是否相同
 
 
