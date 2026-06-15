@@ -94,15 +94,15 @@ Scapy 通过将网卡设置为**混杂模式（Promiscuous Mode）**，直接从
   |      派生: HMAC 密钥 = SHA256(秘密)[16:32]   |
   |                                             |
   |──── ⑤ 加密传输 ──────────────────────────>|
-  |      1. AES-128-CBC 加密明文 → 密文          |
-  |      2. HMAC-SHA256(密文) → 认证码           |
-  |      3. RSA 签名(密文) → 数字签名            |
-  |      4. 打包: 密文+HMAC+IV+签名              |
+  |      1. RSA 签名(明文) → 数字签名            |
+  |      2. AES-128-CBC 加密(明文+签名) → 密文   |
+  |      3. HMAC-SHA256(密文) → 认证码           |
+  |      4. 打包: 密文+HMAC+IV                    |
   |                                             |
   |      接收端处理:                              |
-  |      1. HMAC 验证 → 确认数据完整             |
-  |      2. RSA 签名验证 → 确认发送方身份         |
-  |      3. AES-128-CBC 解密 → 还原明文           |
+  |      1. HMAC 验证 → 确认密文完整             |
+  |      2. AES-128-CBC 解密 → 还原明文+签名     |
+  |      3. RSA 签名验证 → 确认发送方身份         |
 ```
 
 **详细步骤说明：**
@@ -127,8 +127,8 @@ Scapy 通过将网卡设置为**混杂模式（Promiscuous Mode）**，直接从
 - 从共享秘密派生密钥：SHA256(s) 的前16字节 = AES 密钥，后16字节 = HMAC 密钥
 
 **步骤5：加密传输数据**
-- 发送端：AES-128-CBC 加密 → HMAC-SHA256 认证 → RSA 签名 → 打包发送
-- 接收端：HMAC 验证 → RSA 签名验证 → AES-128-CBC 解密 → 还原明文
+- 发送端：RSA 签名(明文) → AES-128-CBC 加密(明文+签名) → HMAC-SHA256(密文) → 打包发送
+- 接收端：HMAC 验证(密文) → AES-128-CBC 解密(→明文+签名) → RSA 签名验证(明文)
 
 ### 3、主要代码及注释
 
@@ -223,14 +223,15 @@ def api_connect():
 def api_send():
     plaintext = data.encode('utf-8')
 
-    # 第1步: AES-128-CBC 加密
-    ciphertext, iv = aes_encrypt(plaintext, session_key, mode='cbc')
+    # 第1步: RSA 数字签名（对明文签名，确保不可否认性）
+    signature = rsa_sign(plaintext, _rsa_priv)
 
-    # 第2步: HMAC-SHA256 认证（对密文计算，确保密文完整性）
+    # 第2步: AES-128-CBC 加密（将签名与明文一起加密）
+    payload = struct.pack('>I', len(signature)) + plaintext + signature
+    ciphertext, iv = aes_encrypt(payload, session_key, mode='cbc')
+
+    # 第3步: HMAC-SHA256 认证（对密文计算，Encrypt-then-MAC）
     hmac_value = hmac_sha256(hmac_key, ciphertext)
-
-    # 第3步: RSA 数字签名（对密文签名，确保不可否认性）
-    signature = rsa_sign(ciphertext, _rsa_priv)
 
     # 第4步: 打包传输（自定义协议格式，解决 TCP 粘包）
     packet = pack_packet(ciphertext, encrypted_aes_key, encrypted_hmac_key,
@@ -247,17 +248,20 @@ def handle_received_data(encrypted_packet):
     # 解包
     ciphertext, enc_aes_key, enc_hmac_key, iv, recv_hmac = unpack_packet(encrypted_packet)
 
-    # 第1步: HMAC-SHA256 完整性验证
+    # 第1步: HMAC-SHA256 完整性验证（先验证密文完整性）
     computed_hmac = hmac_sha256(hmac_key, ciphertext)
     if computed_hmac != recv_hmac:
         raise ValueError("HMAC 验证失败！数据可能被篡改")
 
-    # 第2步: RSA 签名验证
-    if not rsa_verify(ciphertext, signature, peer_rsa_pub):
-        raise ValueError("签名验证失败！发送方身份不可信")
+    # 第2步: AES-128-CBC 解密（HMAC通过后才解密）
+    payload = aes_decrypt(ciphertext, session_key, mode='cbc', iv=iv)
+    sig_len = struct.unpack('>I', payload[:4])[0]
+    plaintext = payload[4:-sig_len]
+    signature = payload[-sig_len:]
 
-    # 第3步: AES-128-CBC 解密
-    plaintext = aes_decrypt(ciphertext, session_key, mode='cbc', iv=iv)
+    # 第3步: RSA 签名验证（对明文验证签名）
+    if not rsa_verify(plaintext, signature, peer_rsa_pub):
+        raise ValueError("签名验证失败！发送方身份不可信")
 ```
 
 ---
@@ -915,7 +919,7 @@ HMAC(K, m) = H((K' ⊕ opad) || H((K' ⊕ ipad) || m))
 
 **本系统中的使用方式：**
 - DH 公钥交换时：用 RSA 私钥对 DH 公钥签名，防止中间人替换 DH 公钥
-- 数据传输时：用 RSA 私钥对密文签名，确保发送方身份不可否认
+- 数据传输时：用 RSA 私钥对明文签名，确保发送方身份不可否认
 
 ### 2、主要代码及注释
 
@@ -990,19 +994,20 @@ def rsa_verify(message_bytes, signature_bytes, public_key):
 #### 数据传输中的认证流程（app.py）
 
 ```python
-# ===== 发送端：加密 + 认证 + 签名 =====
+# ===== 发送端：签名 → 加密 → 认证 =====
 @app.route('/api/send', methods=['POST'])
 def api_send():
     plaintext = data.encode('utf-8')
 
-    # 第1步: AES-128-CBC 加密
-    ciphertext, iv = aes_encrypt(plaintext, session_key, mode='cbc')
+    # 第1步: RSA 数字签名（对明文签名，确保不可否认性）
+    signature = rsa_sign(plaintext, _rsa_priv)
 
-    # 第2步: HMAC-SHA256 认证（对密文计算，Encrypt-then-MAC）
+    # 第2步: AES-128-CBC 加密（将签名与明文一起加密）
+    payload = struct.pack('>I', len(signature)) + plaintext + signature
+    ciphertext, iv = aes_encrypt(payload, session_key, mode='cbc')
+
+    # 第3步: HMAC-SHA256 认证（对密文计算，Encrypt-then-MAC）
     hmac_value = hmac_sha256(hmac_key, ciphertext)
-
-    # 第3步: RSA 数字签名（对密文签名，确保不可否认性）
-    signature = rsa_sign(ciphertext, _rsa_priv)
 
     # 第4步: 打包传输
     packet = pack_packet(ciphertext, encrypted_aes_key, encrypted_hmac_key,
@@ -1013,17 +1018,20 @@ def api_send():
 def handle_received_data(encrypted_packet):
     ciphertext, enc_aes_key, enc_hmac_key, iv, recv_hmac = unpack_packet(encrypted_packet)
 
-    # 第1步: HMAC-SHA256 完整性验证（先验证再解密，最安全）
+    # 第1步: HMAC-SHA256 完整性验证（先验证密文完整性，Encrypt-then-MAC）
     computed_hmac = hmac_sha256(hmac_key, ciphertext)
     if computed_hmac != recv_hmac:
         raise ValueError("HMAC 验证失败！数据可能被篡改")
 
-    # 第2步: RSA 签名验证（确认发送方身份）
-    if not rsa_verify(ciphertext, signature, peer_rsa_pub):
-        raise ValueError("签名验证失败！发送方身份不可信")
+    # 第2步: HMAC通过后才解密
+    payload = aes_decrypt(ciphertext, session_key, mode='cbc', iv=iv)
+    sig_len = struct.unpack('>I', payload[:4])[0]
+    plaintext = payload[4:-sig_len]
+    signature = payload[-sig_len:]
 
-    # 第3步: 验证通过后才解密
-    plaintext = aes_decrypt(ciphertext, session_key, mode='cbc', iv=iv)
+    # 第3步: RSA 签名验证（对明文验证签名，确认发送方身份）
+    if not rsa_verify(plaintext, signature, peer_rsa_pub):
+        raise ValueError("签名验证失败！发送方身份不可信")
 ```
 
 ### 3、执行界面
@@ -1035,20 +1043,20 @@ def handle_received_data(encrypted_packet):
 │                                                           │
 │  发送端认证过程:                                           │
 │  ┌────────────────────────────────────────────────────┐   │
-│  │ ① AES-CBC加密 → 密文(32字节)                       │   │
-│  │ ② HMAC-SHA256(密文) → 认证码(32字节)               │   │
+│  │ ① RSA签名(明文) → 数字签名(128字节)                 │   │
+│  │    签名 = SHA256(M)^d mod n                         │   │
+│  │ ② AES-CBC加密(明文+签名) → 密文                     │   │
+│  │ ③ HMAC-SHA256(密文) → 认证码(32字节)               │   │
 │  │    HMAC = SHA256((K⊕opad) || SHA256((K⊕ipad) || C))│   │
-│  │ ③ RSA签名(密文) → 数字签名(128字节)                 │   │
-│  │    签名 = SHA256(C)^d mod n                         │   │
 │  └────────────────────────────────────────────────────┘   │
 │                                                           │
 │  接收端验证过程:                                           │
 │  ┌────────────────────────────────────────────────────┐   │
 │  │ ① HMAC验证: ✓ 计算HMAC == 接收HMAC                 │   │
-│  │    → 数据完整性确认，未被篡改                        │   │
-│  │ ② RSA签名验证: ✓ 恢复哈希 == 实际哈希               │   │
+│  │    → 密文完整性确认，未被篡改                        │   │
+│  │ ② AES-CBC解密 → 明文+签名还原                      │   │
+│  │ ③ RSA签名验证: ✓ 恢复哈希 == 实际哈希               │   │
 │  │    → 发送方身份确认，不可否认                        │   │
-│  │ ③ AES-CBC解密 → 明文还原                            │   │
 │  └────────────────────────────────────────────────────┘   │
 │                                                           │
 │  认证失败场景:                                             │

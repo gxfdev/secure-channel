@@ -1,6 +1,8 @@
 """
 Flask Web Application - Network Security Transmission Demo System
-Complete flow: TCP connection -> DH key negotiation (with signature) -> Data encryption -> Verification and decryption
+Complete flow: TCP connection -> DH key negotiation (with signature) -> Sign-then-Encrypt-then-MAC data transmission
+Send:  RSA Sign(plaintext) -> AES Encrypt(plaintext+signature) -> HMAC(ciphertext)
+Recv:  HMAC verify(ciphertext) -> AES Decrypt -> RSA Verify(plaintext)
 """
 import os
 import sys
@@ -1276,6 +1278,7 @@ def start_negotiate_server():
 
 
 def _handle_data_transfer(conn, req):
+    """Receiver: HMAC verify(ciphertext) -> AES Decrypt -> RSA Verify(plaintext)"""
     global _latest_received
     try:
         session_key = _dh_peer.get_session_key()
@@ -1516,7 +1519,7 @@ def capture_diag():
 
 @app.route('/api/send', methods=['POST'])
 def api_send():
-    """Sender: Encrypt data with AES+HMAC+RSA signature and send to receiver."""
+    """Sender: Sign-then-Encrypt-then-MAC — RSA Sign(plaintext) -> AES Encrypt(plaintext+signature) -> HMAC(ciphertext)"""
     global _latest_received
     try:
         data = request.get_json() or {}

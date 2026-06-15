@@ -1,6 +1,7 @@
 """
 发送端主程序 - CLI 版本
-流程: 生成传感器数据 → AES加密 → HMAC认证 → RSA加密密钥 → Socket发送
+流程: 生成传感器数据 → AES加密 → HMAC认证(Encrypt-then-MAC) → RSA加密密钥 → Socket发送
+注: CLI简化版不含RSA签名，完整版请使用Web界面(app.py)，顺序为: RSA签名(明文) → AES加密 → HMAC(密文)
 """
 import os
 import sys

@@ -1,6 +1,7 @@
 """
 接收端主程序 - CLI 版本
 流程: Socket接收 → RSA解密密钥 → HMAC验证 → AES解密 → 还原数据
+注: CLI简化版不含RSA签名验证，完整版请使用Web界面(app.py)，顺序为: HMAC验证 → AES解密 → RSA签名验证(明文)
 """
 import os
 import sys
