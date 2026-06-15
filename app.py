@@ -1285,7 +1285,9 @@ def _handle_data_transfer(conn, req):
         encrypted_packet = _recv_exact(conn, data_len)
 
         sig_len = struct.unpack('>I', _recv_exact(conn, 4))[0]
-        signature = _recv_exact(conn, sig_len)
+        # 签名已包含在密文中，不再单独读取（兼容旧格式）
+        if sig_len > 0:
+            _recv_exact(conn, sig_len)
 
         from network import unpack_packet
         ct, _, _, recv_iv, recv_hmac = unpack_packet(encrypted_packet)
@@ -1294,58 +1296,71 @@ def _handle_data_transfer(conn, req):
 
         steps.append({
             'id': 1, 'title': '接收加密数据',
-            'description': '收到发送端的加密数据包和数字签名',
+            'description': '收到发送端的加密数据包',
             'data': {
                 '加密数据包长度': f'{data_len} 字节',
                 '密文长度': f'{len(ct)} 字节',
-                '签名长度': f'{sig_len} 字节',
                 '发送端 IP': _connection_state.get('peer_ip', '未知'),
             }
         })
 
+        # Step 2: HMAC-SHA256 验证 (Encrypt-then-MAC，先验证密文完整性)
         computed_hmac = hmac_sha256(hmac_key, ct)
         hmac_valid = (computed_hmac == recv_hmac)
         steps.append({
             'id': 2, 'title': 'HMAC-SHA256 完整性验证',
-            'description': '用 DH 派生的密钥重新计算 HMAC，与收到的 HMAC 比较',
+            'description': '先验证密文完整性（Encrypt-then-MAC），防止篡改',
             'data': {
                 'HMAC 密钥': hmac_key.hex(),
                 '收到的 HMAC': recv_hmac.hex(),
                 '计算的 HMAC': computed_hmac.hex(),
-                '结果': '通过 - 数据完整' if hmac_valid else '失败 - 数据可能被篡改！',
+                '结果': '通过 - 密文完整' if hmac_valid else '失败 - 密文可能被篡改！',
             },
             'status': 'success' if hmac_valid else 'error'
         })
 
+        # Step 3: AES-128-CBC 解密 (HMAC通过后才解密)
+        decrypted_payload = aes_decrypt(ct, session_key, mode='cbc', iv=recv_iv)
+        # 解密后的数据格式: [签名长度4字节][明文][签名]
+        if len(decrypted_payload) < 4:
+            raise ValueError("解密数据格式错误：长度不足")
+        sig_len_dec = struct.unpack('>I', decrypted_payload[:4])[0]
+        if sig_len_dec == 0 or len(decrypted_payload) < 4 + sig_len_dec:
+            raise ValueError("解密数据格式错误：签名长度异常")
+        # 明文在签名长度字段之后、签名之前
+        remaining = decrypted_payload[4:]
+        plaintext_bytes = remaining[:-sig_len_dec]
+        signature = remaining[-sig_len_dec:]
+        decrypted_text = plaintext_bytes.decode('utf-8')
+
+        steps.append({
+            'id': 3, 'title': 'AES-128-CBC 解密',
+            'description': 'HMAC 验证通过后，用 DH 派生的会话密钥解密',
+            'data': {
+                'AES 密钥': session_key.hex(),
+                'IV': recv_iv.hex() if recv_iv else '',
+                '密文（前128字节）': ct.hex()[:128] + '...',
+                '解密后明文长度': f'{len(decrypted_text)} 字符',
+                '内含签名长度': f'{sig_len_dec} 字节',
+            },
+            'status': 'success' if hmac_valid else 'error'
+        })
+
+        # Step 4: RSA 数字签名验证 (对明文验证签名)
         peer_rsa_pub = _connection_state.get('peer_public_key_raw')
         if peer_rsa_pub:
-            sig_verified = rsa_verify(ct, signature, peer_rsa_pub)
+            sig_verified = rsa_verify(plaintext_bytes, signature, peer_rsa_pub)
         else:
             sig_verified = False
         steps.append({
-            'id': 3, 'title': 'RSA 数字签名验证',
-            'description': '用发送端 RSA 公钥验证签名，确保不可否认性',
+            'id': 4, 'title': 'RSA 数字签名验证',
+            'description': '用发送端 RSA 公钥验证明文签名，确保不可否认性',
             'data': {
                 '算法': 'RSA-SHA256',
                 '对方公钥': '已获取' if peer_rsa_pub else '未获取（无法验证）',
                 '结果': '通过 - 来源可信' if sig_verified else '失败 - 来源不可信！',
             },
             'status': 'success' if sig_verified else 'error'
-        })
-
-        decrypted = aes_decrypt(ct, session_key, mode='cbc', iv=recv_iv)
-        decrypted_text = decrypted.decode('utf-8')
-        steps.append({
-            'id': 4, 'title': 'AES-128-CBC 解密',
-            'description': '用 DH 派生的会话密钥解密密文',
-            'data': {
-                'AES 密钥': session_key.hex(),
-                'IV': recv_iv.hex() if recv_iv else '',
-                '密文（前128字节）': ct.hex()[:128] + '...',
-                '解密后长度': f'{len(decrypted_text)} 字符',
-                '结果': '成功' if hmac_valid and sig_verified else '已解密但验证失败',
-            },
-            'status': 'success' if hmac_valid and sig_verified else 'error'
         })
 
         filepath = os.path.join(DATA_DIR, 'latest_received.json')
@@ -1522,42 +1537,47 @@ def api_send():
 
         steps = []
 
-        # Step 1: AES-128-CBC Encryption
-        iv = os.urandom(16)
-        ciphertext, iv_used = aes_encrypt(plaintext.encode('utf-8'), session_key, mode='cbc', iv=iv)
+        # Step 1: RSA Digital Signature (对明文签名，确保不可否认性)
+        my_rsa_priv = get_rsa_keys()[1]
+        signature = rsa_sign(plaintext.encode('utf-8'), my_rsa_priv)
         steps.append({
-            'id': 1, 'title': 'AES-128-CBC 加密',
-            'description': '用 DH 派生的会话密钥加密明文',
+            'id': 1, 'title': 'RSA 数字签名',
+            'description': '用 RSA 私钥对明文签名，确保不可否认性',
+            'detail': {
+                '签名算法': 'RSA-SHA256',
+                '签名值': signature.hex()[:64] + '...',
+                '用途': '对原始明文签名，确保数据真实性和不可否认性',
+            }
+        })
+
+        # Step 2: AES-128-CBC Encryption (加密明文+签名)
+        iv = os.urandom(16)
+        # 将签名附加到明文后面一起加密：[明文长度4字节][明文][签名]
+        plaintext_bytes = plaintext.encode('utf-8')
+        sig_len_bytes = struct.pack('>I', len(signature))
+        payload = sig_len_bytes + plaintext_bytes + signature
+        ciphertext, iv_used = aes_encrypt(payload, session_key, mode='cbc', iv=iv)
+        steps.append({
+            'id': 2, 'title': 'AES-128-CBC 加密',
+            'description': '用 DH 派生的会话密钥加密（明文+签名）',
             'detail': {
                 'AES 密钥': session_key.hex(),
                 'IV': iv_used.hex(),
                 '明文长度': f'{len(plaintext)} 字符',
+                '签名长度': f'{len(signature)} 字节',
                 '密文长度': f'{len(ciphertext)} 字节',
             }
         })
 
-        # Step 2: HMAC-SHA256 Authentication
+        # Step 3: HMAC-SHA256 Authentication (对密文做HMAC，Encrypt-then-MAC)
         hmac_value = hmac_sha256(hmac_key, ciphertext)
         steps.append({
-            'id': 2, 'title': 'HMAC-SHA256 认证',
-            'description': '计算密文的 HMAC 值，用于完整性验证',
+            'id': 3, 'title': 'HMAC-SHA256 认证',
+            'description': '计算密文的 HMAC 值（Encrypt-then-MAC），用于完整性验证',
             'detail': {
                 'HMAC 密钥': hmac_key.hex(),
                 'HMAC 值': hmac_value.hex(),
-                '用途': '确保传输过程中数据完整性',
-            }
-        })
-
-        # Step 3: RSA Digital Signature
-        my_rsa_priv = get_rsa_keys()[1]
-        signature = rsa_sign(ciphertext, my_rsa_priv)
-        steps.append({
-            'id': 3, 'title': 'RSA 数字签名',
-            'description': '用 RSA 私钥对密文签名，确保不可否认性',
-            'detail': {
-                '签名算法': 'RSA-SHA256',
-                '签名值': signature.hex()[:64] + '...',
-                '用途': '确保数据真实性和不可否认性',
+                '用途': '确保传输过程中密文完整性',
             }
         })
 
@@ -1604,7 +1624,8 @@ def api_send():
             transfer_msg = json.dumps({'type': 'data_transfer'}).encode()
             send_sock.sendall(struct.pack('>I', len(transfer_msg)) + transfer_msg)
             send_sock.sendall(struct.pack('>I', len(packet)) + packet)
-            send_sock.sendall(struct.pack('>I', len(signature)) + signature)
+            # 签名已包含在密文中，不再单独发送
+            send_sock.sendall(struct.pack('>I', 0))  # 签名长度=0
 
             # 等待接收端确认
             recv_ack_detail = ''
